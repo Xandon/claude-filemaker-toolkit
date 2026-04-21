@@ -453,6 +453,20 @@ def _normalize_findings(findings, scripts_data):
             # template-based after_steps dicts, or parsed human-readable
             # after_steps strings), not a copy of the broken code.
 
+            # ── Validation: warn when a fix has human-readable before/after
+            # but no paste-ready XML was produced. Without fix_xml the
+            # "Copy Fix XML" button is silently omitted from the HTML, which
+            # is almost never what the review author intended.
+            if 'fix_xml' not in fix_data and (
+                    'before_human' in fix_data or 'after_human' in fix_data):
+                label = finding.get('title') or finding.get('id') or '?'
+                print(
+                    f"WARNING: finding '{label}' (script {sid_str}) — no "
+                    f"fix_xml generated; missing 'after_steps' / "
+                    f"'fix_step_indices' / 'fix_xml'. The 'Copy Fix XML' "
+                    f"button will not render for this finding.",
+                    file=sys.stderr)
+
     return findings
 
 
