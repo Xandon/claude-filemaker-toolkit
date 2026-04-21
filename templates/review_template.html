@@ -345,6 +345,14 @@ body {
   color: #7c8aff;
 }
 .btn-primary:hover { background: rgba(124,138,255,0.25); }
+.btn-disabled,
+.btn-disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-style: dashed;
+  background: #2a2a3e;
+  color: #c0c0d8;
+}
 
 
 /* ── Overview Tab ────────────────────────────────────────────────── */
@@ -1289,7 +1297,10 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
         body.appendChild(diffContainer);
       }
 
-      // Simple "Copy Fix XML" button
+      // "Copy Fix XML" button — rendered enabled when we have paste-ready XML,
+      // or as a disabled placeholder with a tooltip when the review JSON only
+      // supplied before_human/after_human. The disabled state makes the gap
+      // visible instead of silently omitting the button.
       if (fix.fix_xml) {
         var copyBtn = document.createElement('button');
         copyBtn.className = 'btn';
@@ -1299,6 +1310,16 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
           copyToClipboard(fix.fix_xml, copyBtn);
         });
         body.appendChild(copyBtn);
+      } else if (fix.before_human || fix.after_human) {
+        var disabledBtn = document.createElement('button');
+        disabledBtn.className = 'btn btn-disabled';
+        disabledBtn.textContent = 'Copy Fix XML';
+        disabledBtn.disabled = true;
+        disabledBtn.title =
+          'No paste-ready XML for this fix — the review JSON is missing ' +
+          '"after_steps", "fix_step_indices", or "fix_xml". See the fix ' +
+          'description above for the intended change.';
+        body.appendChild(disabledBtn);
       }
     }
 
