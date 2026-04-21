@@ -1,0 +1,45 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Editor ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---- Plugin runtime / build caches ----
+.mcpb-cache/
+*.mcpb
+
+# ---- FileMaker indexed artifacts (generated locally from DDR XML) ----
+# These are produced by `/fm-setup` and should not be checked in.
+*.db
+*.sqlite
+*.sqlite3
+fm_index/
+indexed/
+
+# ---- Large DDR XML exports (typically user-specific) ----
+# Uncomment if you want to keep sample XML out of the repo:
+# *.xml
+
+# ---- Generated review output ----
+review_output/
+*.review.html

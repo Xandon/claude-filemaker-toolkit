@@ -1,0 +1,15 @@
+{
+  "name": "filemaker-toolkit",
+  "version": "0.1.0",
+  "description": "Analyze FileMaker Pro DDR XML exports — index scripts, fields, layouts, relationships, and custom functions into SQLite for fast querying, code review, and dependency analysis.",
+  "author": {
+    "name": "Xandon"
+  },
+  "keywords": [
+    "filemaker",
+    "ddr",
+    "xml",
+    "code-review",
+    "database"
+  ]
+}

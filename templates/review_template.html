@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FileMaker Script Code Review</title>
+<style>
+/* ── Reset & Base ────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+  background: #1e1e2e;
+  color: #e0e0e0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1e1e2e; }
+::-webkit-scrollbar-thumb { background: #484868; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #5a5a7a; }
+
+/* ── Header ──────────────────────────────────────────────────────── */
+.header {
+  background: #16162a;
+  border-bottom: 1px solid #3a3a5c;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.header-left { display: flex; flex-direction: column; gap: 4px; }
+.header-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+.header-subtitle {
+  font-size: 0.85rem;
+  color: #8888aa;
+}
+.header-subtitle span { margin-right: 16px; }
+.header-badges { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.badge-scripts { background: #2a2a5a; color: #7c8aff; }
+.badge-critical { background: rgba(255,71,87,0.18); color: #ff4757; }
+.badge-high { background: rgba(255,165,2,0.18); color: #ffa502; }
+.badge-medium { background: rgba(52,152,219,0.18); color: #3498db; }
+
+/* ── Tabs ────────────────────────────────────────────────────────── */
+.tab-bar {
+  background: #1a1a30;
+  display: flex;
+  border-bottom: 1px solid #3a3a5c;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.tab {
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  color: #8888aa;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.tab:hover { background: #242444; color: #c0c0d0; }
+.tab.active {
+  color: #e0e0e0;
+  border-bottom-color: #7c8aff;
+  background: #282840;
+}
+.tab .tab-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.tab .tab-badge.has-findings { background: rgba(255,71,87,0.25); color: #ff6b7a; }
+.tab .tab-badge.no-findings { background: #2a2a4a; color: #606080; }
+
+/* ── Main Layout ─────────────────────────────────────────────────── */
+.main { flex: 1; display: flex; overflow: hidden; }
+.panel-left {
+  width: 65%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #3a3a5c;
+}
+.panel-right {
+  width: 35%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel-header {
+  padding: 10px 16px;
+  background: #222238;
+  border-bottom: 1px solid #3a3a5c;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #8888aa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* ── Script Steps ────────────────────────────────────────────────── */
+.steps-container { padding: 0; }
+.step-row {
+  display: flex;
+  align-items: stretch;
+  font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+.step-row:hover { background: rgba(124,138,255,0.04); }
+.step-row.finding-critical {
+  border-left-color: #ff4757;
+  background: rgba(255,71,87,0.06);
+}
+.step-row.finding-critical:hover { background: rgba(255,71,87,0.10); }
+.step-row.finding-high {
+  border-left-color: #ffa502;
+  background: rgba(255,165,2,0.06);
+}
+.step-row.finding-high:hover { background: rgba(255,165,2,0.10); }
+.step-row.finding-medium {
+  border-left-color: #3498db;
+  background: rgba(52,152,219,0.06);
+}
+.step-row.finding-medium:hover { background: rgba(52,152,219,0.10); }
+.step-row.has-finding { cursor: pointer; }
+.step-lineno {
+  width: 48px;
+  min-width: 48px;
+  text-align: right;
+  padding: 2px 10px 2px 0;
+  color: #606080;
+  user-select: none;
+  border-right: 1px solid #2a2a44;
+}
+.step-code {
+  flex: 1;
+  padding: 2px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.step-row.disabled .step-code {
+  text-decoration: line-through;
+  opacity: 0.4;
+}
+
+/* Syntax highlighting */
+.syn-comment { color: #6a9955; }
+.syn-keyword { color: #c586c0; }
+.syn-variable { color: #d4a017; }
+.syn-function { color: #4ec9b0; }
+.syn-string { color: #ce9178; }
+.syn-number { color: #b5cea8; }
+.syn-step { color: #9cdcfe; }
+.syn-operator { color: #d4d4d4; }
+
+/* ── Findings Panel ──────────────────────────────────────────────── */
+.findings-body { padding: 12px; }
+.finding-card {
+  background: #2a2a3e;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #3a3a5c;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.finding-card:hover { border-color: #4a4a6c; }
+.finding-card-header {
+  padding: 12px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  user-select: none;
+}
+.finding-card-header:hover { background: rgba(124,138,255,0.04); }
+.severity-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.severity-critical { background: rgba(255,71,87,0.2); color: #ff4757; }
+.severity-high { background: rgba(255,165,2,0.2); color: #ffa502; }
+.severity-medium { background: rgba(52,152,219,0.2); color: #3498db; }
+.finding-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  flex: 1;
+}
+.finding-expand-icon {
+  color: #606080;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  margin-top: 3px;
+  transition: transform 0.2s;
+}
+.finding-card.expanded .finding-expand-icon { transform: rotate(90deg); }
+.finding-card-body {
+  display: none;
+  padding: 0 16px 16px;
+}
+.finding-card.expanded .finding-card-body { display: block; }
+
+.finding-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.finding-step-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'Menlo', 'Consolas', monospace;
+  font-size: 0.75rem;
+  cursor: pointer;
+  background: #1e1e2e;
+  color: #7c8aff;
+  border: 1px solid #3a3a5c;
+  transition: all 0.1s;
+}
+.finding-step-badge:hover {
+  background: #7c8aff;
+  color: #1e1e2e;
+}
+.finding-description {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin-bottom: 14px;
+  color: #c0c0d8;
+}
+.callout {
+  padding: 12px 14px;
+  border-radius: 6px;
+  margin-bottom: 14px;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.callout-label {
+  font-weight: 700;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.callout-best-practice {
+  background: rgba(124,138,255,0.08);
+  border-left: 3px solid #7c8aff;
+}
+.callout-best-practice .callout-label { color: #7c8aff; }
+.callout-fix {
+  background: rgba(78,201,176,0.08);
+  border-left: 3px solid #4ec9b0;
+}
+.callout-fix .callout-label { color: #4ec9b0; }
+
+/* Diff view */
+.diff-container { margin-bottom: 12px; }
+.diff-block {
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid #3a3a5c;
+}
+.diff-header {
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.diff-before .diff-header { background: rgba(255,71,87,0.12); color: #ff6b7a; }
+.diff-after .diff-header { background: rgba(78,201,176,0.12); color: #4ec9b0; }
+.diff-code {
+  padding: 10px 14px;
+  font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #1e1e2e;
+}
+.diff-before .diff-code { color: #e08080; }
+.diff-after .diff-code { color: #80d0b8; }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #3a3a5c;
+  background: #2a2a3e;
+  color: #c0c0d8;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.btn:hover { background: #3a3a5c; color: #e0e0e0; }
+.btn.copied { background: #2a5a3a; border-color: #4ec9b0; color: #4ec9b0; }
+.btn-primary {
+  background: rgba(124,138,255,0.15);
+  border-color: #7c8aff;
+  color: #7c8aff;
+}
+.btn-primary:hover { background: rgba(124,138,255,0.25); }
+
+
+/* ── Overview Tab ────────────────────────────────────────────────── */
+.overview-container {
+  padding: 24px;
+  max-width: 1200px;
+}
+.overview-context {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #a0a0c0;
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #222238;
+  border-radius: 8px;
+  border: 1px solid #3a3a5c;
+}
+.overview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.overview-table th {
+  text-align: left;
+  padding: 10px 14px;
+  background: #222238;
+  color: #8888aa;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #3a3a5c;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.overview-table th:hover { color: #c0c0d8; }
+.overview-table th .sort-arrow { margin-left: 4px; font-size: 0.65rem; }
+.overview-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a2a44;
+  vertical-align: top;
+}
+.overview-table tr { transition: background 0.1s; }
+.overview-table tbody tr:hover {
+  background: rgba(124,138,255,0.06);
+  cursor: pointer;
+}
+.overview-table .td-title { font-weight: 500; color: #e0e0e0; }
+.overview-table .td-scripts { color: #8888aa; font-size: 0.8rem; }
+
+/* ── Script Info Bar ─────────────────────────────────────────────── */
+.script-info {
+  padding: 10px 16px;
+  background: #1e1e32;
+  border-bottom: 1px solid #3a3a5c;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: #8888aa;
+  flex-shrink: 0;
+}
+.script-info-item { display: flex; align-items: center; gap: 5px; }
+.script-info-label { color: #606080; }
+.script-info-value { color: #c0c0d8; }
+
+/* ── Custom Functions Panel ──────────────────────────────────────── */
+.cf-panel {
+  padding: 8px 16px;
+  background: #1a1a2e;
+  border-bottom: 1px solid #3a3a5c;
+  flex-shrink: 0;
+}
+.cf-panel-header {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #606080;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.cf-panel-header:hover { color: #8888aa; }
+.cf-panel-header .cf-toggle { font-size: 0.65rem; transition: transform 0.2s; }
+.cf-panel-header .cf-toggle.collapsed { transform: rotate(-90deg); }
+.cf-panel-body { display: flex; flex-wrap: wrap; gap: 6px; }
+.cf-panel-body.collapsed { display: none; }
+.cf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: #252545;
+  border: 1px solid #3a3a5c;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #c0c0d8;
+  cursor: default;
+  position: relative;
+}
+.cf-chip:hover { background: #2e2e50; border-color: #5a5a7a; }
+.cf-chip .cf-name { font-family: 'SF Mono', SFMono-Regular, Menlo, monospace; }
+.cf-chip .cf-steps {
+  font-size: 0.65rem;
+  color: #8888aa;
+  background: #1e1e32;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.cf-chip .cf-usage {
+  font-size: 0.6rem;
+  color: #606080;
+}
+.cf-chip.cf-framework { border-color: #4a6a8a; background: #1e2e40; }
+.cf-chip.cf-framework .cf-name { color: #7ab8e0; }
+.cf-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #16162a;
+  border: 1px solid #5a5a7a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  color: #c0c0d8;
+  white-space: nowrap;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.cf-chip:hover .cf-tooltip { display: block; }
+.cf-tooltip-sig { font-family: 'SF Mono', SFMono-Regular, Menlo, monospace; color: #e0e0e0; margin-bottom: 3px; }
+.cf-tooltip-meta { color: #8888aa; font-size: 0.65rem; }
+.cf-tooltip-body {
+  font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
+  background: #1a1a30;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c0c0d8;
+}
+.cf-expanded-body {
+  display: none;
+  background: #1a1a30;
+  border: 1px solid #3a3a5c;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+  font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: #c0c0d8;
+  overflow-x: auto;
+}
+.cf-expanded-body.expanded { display: block; }
+.cf-expanded-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Flash animation for scroll-to ──────────────────────────────── */
+@keyframes flash-highlight {
+  0% { background: #4a6a2a; }
+  100% { background: transparent; }
+}
+.step-row.flash { animation: flash-highlight 1.5s ease-out; }
+
+/* ── Bottom Bar ──────────────────────────────────────────────────── */
+.bottom-bar {
+  background: #16162a;
+  border-top: 1px solid #3a3a5c;
+  padding: 8px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  min-height: 42px;
+}
+.bottom-bar-left { display: flex; gap: 10px; align-items: center; }
+.bottom-bar-right {
+  font-size: 0.75rem;
+  color: #606080;
+}
+
+/* ── Empty State ─────────────────────────────────────────────────── */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #606080;
+  gap: 12px;
+  padding: 40px;
+}
+.empty-state-icon { font-size: 2.5rem; opacity: 0.3; }
+.empty-state-text { font-size: 1rem; }
+.empty-state-sub { font-size: 0.8rem; }
+
+/* ── No findings message ─────────────────────────────────────────── */
+.no-findings-msg {
+  padding: 24px;
+  text-align: center;
+  color: #606080;
+  font-size: 0.85rem;
+}
+
+/* ── Print ────────────────────────────────────────────────────────── */
+@media print {
+  body { background: #fff; color: #222; font-size: 11px; }
+  .header { background: #f5f5f5; border-bottom: 1px solid #ccc; }
+  .header-title { color: #222; }
+  .header-subtitle, .header-subtitle span { color: #666; }
+  .tab-bar { display: none; }
+  .bottom-bar { display: none; }
+  .main { display: block; overflow: visible; height: auto; }
+  .panel-left, .panel-right { width: 100%; border: none; }
+  .panel-left { page-break-after: always; }
+  .step-row { border-left-width: 2px; }
+  .step-row.finding-critical { background: #fff0f0; border-left-color: #cc0000; }
+  .step-row.finding-high { background: #fff8f0; border-left-color: #cc7700; }
+  .step-row.finding-medium { background: #f0f4ff; border-left-color: #2266cc; }
+  .step-lineno { color: #999; border-right-color: #ddd; }
+  .step-code { color: #222; }
+  .syn-comment { color: #448844; }
+  .syn-keyword { color: #8844aa; }
+  .syn-variable { color: #996600; }
+  .syn-function { color: #228866; }
+  .syn-string { color: #884422; }
+  .finding-card { background: #f8f8f8; border-color: #ddd; break-inside: avoid; }
+  .finding-card-body { display: block !important; }
+  .diff-code { background: #f5f5f5; }
+  .diff-before .diff-code { color: #882222; }
+  .diff-after .diff-code { color: #226644; }
+  .btn { display: none; }
+  .badge-scripts { background: #e8e8f0; }
+  .badge-critical { background: #ffe8ea; }
+  .badge-high { background: #fff0e0; }
+  .badge-medium { background: #e4ecf8; }
+  ::-webkit-scrollbar { display: none; }
+  .overview-container { max-width: 100%; }
+  .overview-table th { background: #eee; }
+  .overview-table td { border-color: #ddd; }
+  .panel-header { background: #eee; color: #666; border-color: #ddd; }
+  .callout-best-practice { background: #f0f0ff; }
+  .callout-fix { background: #f0fff8; }
+}
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script>
+// Review data injected by fm_review_gen.py
+window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
+
+(function() {
+  'use strict';
+
+  const data = window.REVIEW_DATA || {};
+  const meta = data.meta || {};
+  const scripts = data.scripts || [];
+  const findings = data.findings || [];
+
+  const app = document.getElementById('app');
+
+  // ── Utilities ──────────────────────────────────────────────────
+
+  function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function copyToClipboard(text, buttonEl) {
+    navigator.clipboard.writeText(text).then(function() {
+      var orig = buttonEl.textContent;
+      buttonEl.textContent = 'Copied!';
+      buttonEl.classList.add('copied');
+      setTimeout(function() {
+        buttonEl.textContent = orig;
+        buttonEl.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
+  // Severity ordering
+  var severityOrder = { critical: 0, high: 1, medium: 2 };
+
+  // ── Compute finding maps ───────────────────────────────────────
+
+  // Map: scriptId -> array of findings
+  var scriptFindings = {};
+  scripts.forEach(function(s) { scriptFindings[s.script_id] = []; });
+  findings.forEach(function(f) {
+    (f.script_ids || []).forEach(function(sid) {
+      if (!scriptFindings[sid]) scriptFindings[sid] = [];
+      scriptFindings[sid].push(f);
+    });
+  });
+
+  // Map: scriptId -> { stepIndex -> highest severity }
+  var stepFindingMap = {};
+  findings.forEach(function(f) {
+    var aSteps = f.affected_steps || {};
+    Object.keys(aSteps).forEach(function(sid) {
+      if (!stepFindingMap[sid]) stepFindingMap[sid] = {};
+      aSteps[sid].forEach(function(idx) {
+        var existing = stepFindingMap[sid][idx];
+        if (!existing || severityOrder[f.severity] < severityOrder[existing.severity]) {
+          stepFindingMap[sid][idx] = f;
+        }
+      });
+    });
+  });
+
+  // Map: stepIndex -> finding for click navigation
+  var stepToFinding = {};
+  findings.forEach(function(f) {
+    var aSteps = f.affected_steps || {};
+    Object.keys(aSteps).forEach(function(sid) {
+      if (!stepToFinding[sid]) stepToFinding[sid] = {};
+      aSteps[sid].forEach(function(idx) {
+        stepToFinding[sid][idx] = f;
+      });
+    });
+  });
+
+  // Summary counts
+  var severityCounts = { critical: 0, high: 0, medium: 0 };
+  findings.forEach(function(f) {
+    if (severityCounts[f.severity] !== undefined) severityCounts[f.severity]++;
+  });
+
+  // ── Check for empty data ───────────────────────────────────────
+
+  if (!scripts.length && !findings.length) {
+    app.innerHTML =
+      '<div class="empty-state">' +
+        '<div class="empty-state-icon">&#128269;</div>' +
+        '<div class="empty-state-text">No review data loaded</div>' +
+        '<div class="empty-state-sub">This template expects review data to be injected by the Python generator.</div>' +
+      '</div>';
+    return;
+  }
+
+  // ── State ──────────────────────────────────────────────────────
+
+  var activeTab = 'overview'; // 'overview' or script_id
+  var overviewSort = { col: 'severity', asc: true };
+
+  // ── Render ─────────────────────────────────────────────────────
+
+  function render() {
+    app.innerHTML = '';
+    app.style.display = 'flex';
+    app.style.flexDirection = 'column';
+    app.style.height = '100vh';
+
+    renderHeader();
+    renderTabs();
+
+    if (activeTab === 'overview') {
+      renderOverview();
+    } else {
+      renderScriptView();
+    }
+
+    renderBottomBar();
+  }
+
+  // ── Header ─────────────────────────────────────────────────────
+
+  function renderHeader() {
+    var h = document.createElement('div');
+    h.className = 'header';
+
+    var left = document.createElement('div');
+    left.className = 'header-left';
+
+    var title = document.createElement('div');
+    title.className = 'header-title';
+    title.textContent = meta.title || 'FileMaker Script Code Review';
+    left.appendChild(title);
+
+    var sub = document.createElement('div');
+    sub.className = 'header-subtitle';
+    if (meta.solution) sub.innerHTML += '<span>Solution: ' + esc(meta.solution) + '</span>';
+    if (meta.date) sub.innerHTML += '<span>Date: ' + esc(meta.date) + '</span>';
+    if (meta.reviewer) sub.innerHTML += '<span>Reviewer: ' + esc(meta.reviewer) + '</span>';
+    left.appendChild(sub);
+
+    var right = document.createElement('div');
+    right.className = 'header-badges';
+    right.innerHTML =
+      '<span class="badge badge-scripts">' + scripts.length + ' scripts</span>' +
+      (severityCounts.critical ? '<span class="badge badge-critical">' + severityCounts.critical + ' critical</span>' : '') +
+      (severityCounts.high ? '<span class="badge badge-high">' + severityCounts.high + ' high</span>' : '') +
+      (severityCounts.medium ? '<span class="badge badge-medium">' + severityCounts.medium + ' medium</span>' : '') +
+      (!findings.length ? '<span class="badge badge-scripts">0 findings</span>' : '');
+
+    h.appendChild(left);
+    h.appendChild(right);
+    app.appendChild(h);
+  }
+
+  // ── Tabs ───────────────────────────────────────────────────────
+
+  function renderTabs() {
+    var bar = document.createElement('div');
+    bar.className = 'tab-bar';
+
+    // Overview tab
+    var ovTab = document.createElement('div');
+    ovTab.className = 'tab' + (activeTab === 'overview' ? ' active' : '');
+    ovTab.innerHTML = 'Overview <span class="tab-badge ' + (findings.length ? 'has-findings' : 'no-findings') + '">' + findings.length + '</span>';
+    ovTab.addEventListener('click', function() { activeTab = 'overview'; render(); });
+    bar.appendChild(ovTab);
+
+    // Script tabs
+    scripts.forEach(function(s) {
+      var t = document.createElement('div');
+      var fc = (scriptFindings[s.script_id] || []).length;
+      t.className = 'tab' + (activeTab === s.script_id ? ' active' : '');
+      t.innerHTML = esc(s.name) +
+        ' <span class="tab-badge ' + (fc ? 'has-findings' : 'no-findings') + '">' + fc + '</span>';
+      t.addEventListener('click', function() { activeTab = s.script_id; render(); });
+      bar.appendChild(t);
+    });
+
+    app.appendChild(bar);
+  }
+
+  // ── Overview ───────────────────────────────────────────────────
+
+  function renderOverview() {
+    var wrap = document.createElement('div');
+    wrap.className = 'main';
+    wrap.style.overflow = 'auto';
+
+    var container = document.createElement('div');
+    container.className = 'overview-container';
+
+    // Context
+    if (meta.context) {
+      var ctx = document.createElement('div');
+      ctx.className = 'overview-context';
+      ctx.textContent = meta.context;
+      container.appendChild(ctx);
+    }
+
+    if (!findings.length) {
+      var noF = document.createElement('div');
+      noF.className = 'no-findings-msg';
+      noF.textContent = 'No findings to display.';
+      container.appendChild(noF);
+      wrap.appendChild(container);
+      app.appendChild(wrap);
+      return;
+    }
+
+    // Sort findings
+    var sorted = findings.slice().sort(function(a, b) {
+      var col = overviewSort.col;
+      var av, bv;
+      if (col === 'severity') {
+        av = severityOrder[a.severity] || 9;
+        bv = severityOrder[b.severity] || 9;
+      } else if (col === 'title') {
+        av = (a.title || '').toLowerCase();
+        bv = (b.title || '').toLowerCase();
+      } else if (col === 'scripts') {
+        av = (a.script_ids || []).length;
+        bv = (b.script_ids || []).length;
+      } else {
+        av = a.id || 0;
+        bv = b.id || 0;
+      }
+      if (av < bv) return overviewSort.asc ? -1 : 1;
+      if (av > bv) return overviewSort.asc ? 1 : -1;
+      return 0;
+    });
+
+    // Table
+    var table = document.createElement('table');
+    table.className = 'overview-table';
+
+    var cols = [
+      { key: 'id', label: '#' },
+      { key: 'severity', label: 'Severity' },
+      { key: 'title', label: 'Finding' },
+      { key: 'scripts', label: 'Scripts' }
+    ];
+
+    var thead = document.createElement('thead');
+    var tr = document.createElement('tr');
+    cols.forEach(function(c) {
+      var th = document.createElement('th');
+      var arrow = '';
+      if (overviewSort.col === c.key) {
+        arrow = overviewSort.asc ? ' &#9650;' : ' &#9660;';
+      }
+      th.innerHTML = esc(c.label) + '<span class="sort-arrow">' + arrow + '</span>';
+      th.addEventListener('click', function() {
+        if (overviewSort.col === c.key) {
+          overviewSort.asc = !overviewSort.asc;
+        } else {
+          overviewSort.col = c.key;
+          overviewSort.asc = true;
+        }
+        render();
+      });
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    sorted.forEach(function(f) {
+      var row = document.createElement('tr');
+
+      var td1 = document.createElement('td');
+      td1.textContent = f.id;
+      row.appendChild(td1);
+
+      var td2 = document.createElement('td');
+      td2.innerHTML = '<span class="severity-pill severity-' + esc(f.severity) + '">' + esc(f.severity) + '</span>';
+      row.appendChild(td2);
+
+      var td3 = document.createElement('td');
+      td3.className = 'td-title';
+      td3.textContent = f.title || '';
+      row.appendChild(td3);
+
+      var td4 = document.createElement('td');
+      td4.className = 'td-scripts';
+      var scriptNames = (f.script_ids || []).map(function(sid) {
+        var s = scripts.find(function(x) { return x.script_id === sid; });
+        return s ? s.name : 'ID ' + sid;
+      });
+      td4.textContent = scriptNames.join(', ');
+      row.appendChild(td4);
+
+      row.addEventListener('click', function() {
+        var targetSid = (f.script_ids || [])[0];
+        if (targetSid !== undefined) {
+          activeTab = targetSid;
+          render();
+          // Scroll to finding after render
+          setTimeout(function() {
+            var el = document.getElementById('finding-' + f.id);
+            if (el) {
+              el.classList.add('expanded');
+              el.querySelector('.finding-card-body').style.display = 'block';
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 50);
+        }
+      });
+
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
+    wrap.appendChild(container);
+    app.appendChild(wrap);
+  }
+
+  // ── Script View ────────────────────────────────────────────────
+
+  function renderScriptView() {
+    var script = scripts.find(function(s) { return s.script_id === activeTab; });
+    if (!script) { activeTab = 'overview'; render(); return; }
+
+    var sFindings = scriptFindings[script.script_id] || [];
+    var sStepMap = stepFindingMap[String(script.script_id)] || {};
+    var sStepToFinding = stepToFinding[String(script.script_id)] || {};
+
+    // Script info bar
+    var info = document.createElement('div');
+    info.className = 'script-info';
+
+    var items = [];
+    items.push({ label: 'ID', value: script.script_id });
+    items.push({ label: 'Steps', value: script.step_count || (script.steps || []).length });
+    if (script.flags) {
+      if (script.flags.hidden) items.push({ label: 'Hidden', value: 'Yes' });
+      if (script.flags.full_access) items.push({ label: 'Full Access', value: 'Yes' });
+    }
+    if (script.called_from && script.called_from.length) {
+      items.push({ label: 'Called from', value: script.called_from.map(function(c) { return c.name; }).join(', ') });
+    }
+    if (script.sub_scripts && script.sub_scripts.length) {
+      items.push({ label: 'Sub-scripts', value: script.sub_scripts.map(function(c) { return c.name; }).join(', ') });
+    }
+
+    items.forEach(function(it) {
+      var d = document.createElement('div');
+      d.className = 'script-info-item';
+      d.innerHTML = '<span class="script-info-label">' + esc(it.label) + ':</span> <span class="script-info-value">' + esc(String(it.value)) + '</span>';
+      info.appendChild(d);
+    });
+    app.appendChild(info);
+
+    // Custom Functions panel
+    if (script.custom_functions && script.custom_functions.length) {
+      var cfPanel = document.createElement('div');
+      cfPanel.className = 'cf-panel';
+
+      var cfHeader = document.createElement('div');
+      cfHeader.className = 'cf-panel-header';
+      var cfToggle = document.createElement('span');
+      cfToggle.className = 'cf-toggle';
+      cfToggle.textContent = '\u25BC';
+      cfHeader.appendChild(cfToggle);
+      cfHeader.appendChild(document.createTextNode('Custom Functions (' + script.custom_functions.length + ')'));
+
+      var cfBody = document.createElement('div');
+      cfBody.className = 'cf-panel-body';
+
+      // Threshold for "framework" CF — used by 50+ scripts
+      var frameworkThreshold = 50;
+
+      script.custom_functions.forEach(function(cf) {
+        var chip = document.createElement('div');
+        chip.className = 'cf-chip';
+        if (cf.used_by_scripts >= frameworkThreshold) chip.classList.add('cf-framework');
+
+        var nameSpan = document.createElement('span');
+        nameSpan.className = 'cf-name';
+        nameSpan.textContent = cf.name;
+        chip.appendChild(nameSpan);
+
+        var stepsSpan = document.createElement('span');
+        stepsSpan.className = 'cf-steps';
+        stepsSpan.textContent = cf.steps.length === 1 ? 'step ' + cf.steps[0] : cf.steps.length + ' steps';
+        chip.appendChild(stepsSpan);
+
+        // Tooltip with full detail
+        var tooltip = document.createElement('div');
+        tooltip.className = 'cf-tooltip';
+        var tooltipHtml = '<div class="cf-tooltip-sig">' + esc(cf.display) + '</div>';
+        if (cf.parameters) {
+          tooltipHtml += '<div class="cf-tooltip-meta">Params: ' + esc(cf.parameters) + '</div>';
+        }
+        tooltipHtml += '<div class="cf-tooltip-meta">Used by ' + cf.used_by_scripts + ' scripts in solution</div>';
+        tooltipHtml += '<div class="cf-tooltip-meta">Steps in this script: ' + cf.steps.join(', ') + '</div>';
+        if (cf.body) {
+          tooltipHtml += '<pre class="cf-tooltip-body">' + esc(cf.body) + '</pre>';
+        }
+        tooltip.innerHTML = tooltipHtml;
+        chip.appendChild(tooltip);
+
+        // Click handler: toggle expanded body panel
+        chip.style.cursor = 'pointer';
+        chip.addEventListener('click', function(e) {
+          // Check if a "goto" icon was clicked; if so, just scroll to step
+          if (e.target && e.target.classList && e.target.classList.contains('cf-goto')) {
+            var el = document.getElementById('step-' + script.script_id + '-' + cf.steps[0]);
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 1500); }
+            return;
+          }
+          // Otherwise, toggle the expanded body panel
+          var expandedId = 'cf-expanded-' + script.script_id + '-' + cf.name.replace(/[^a-z0-9_-]/gi, '_');
+          var expandedPanel = document.getElementById(expandedId);
+          if (expandedPanel) {
+            expandedPanel.classList.toggle('expanded');
+          }
+        });
+
+        cfBody.appendChild(chip);
+
+        // Create expanded body panel if CF has a body
+        if (cf.body) {
+          var expandedId = 'cf-expanded-' + script.script_id + '-' + cf.name.replace(/[^a-z0-9_-]/gi, '_');
+          var expandedPanel = document.createElement('div');
+          expandedPanel.id = expandedId;
+          expandedPanel.className = 'cf-expanded-body';
+
+          // Create header with copy button
+          var bodyHeader = document.createElement('div');
+          bodyHeader.style.display = 'flex';
+          bodyHeader.style.justifyContent = 'space-between';
+          bodyHeader.style.alignItems = 'center';
+          bodyHeader.style.marginBottom = '8px';
+          bodyHeader.style.paddingBottom = '8px';
+          bodyHeader.style.borderBottom = '1px solid #3a3a5c';
+
+          var bodyLabel = document.createElement('div');
+          bodyLabel.style.fontSize = '0.7rem';
+          bodyLabel.style.fontWeight = '600';
+          bodyLabel.style.textTransform = 'uppercase';
+          bodyLabel.style.letterSpacing = '0.05em';
+          bodyLabel.style.color = '#8888aa';
+          bodyLabel.textContent = 'Calculation Body';
+          bodyHeader.appendChild(bodyLabel);
+
+          var copyBtn = document.createElement('button');
+          copyBtn.className = 'btn';
+          copyBtn.textContent = 'Copy Body';
+          copyBtn.style.fontSize = '0.7rem';
+          copyBtn.style.padding = '4px 10px';
+          copyBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            copyToClipboard(cf.body, copyBtn);
+          });
+          bodyHeader.appendChild(copyBtn);
+
+          expandedPanel.appendChild(bodyHeader);
+
+          var preEl = document.createElement('pre');
+          preEl.textContent = cf.body;
+          expandedPanel.appendChild(preEl);
+          cfBody.appendChild(expandedPanel);
+        }
+      });
+
+      cfHeader.addEventListener('click', function() {
+        cfBody.classList.toggle('collapsed');
+        cfToggle.classList.toggle('collapsed');
+      });
+
+      cfPanel.appendChild(cfHeader);
+      cfPanel.appendChild(cfBody);
+      app.appendChild(cfPanel);
+    }
+
+    // Main panels
+    var main = document.createElement('div');
+    main.className = 'main';
+
+    // Left panel
+    var left = document.createElement('div');
+    left.className = 'panel-left';
+
+    var leftHeader = document.createElement('div');
+    leftHeader.className = 'panel-header';
+    leftHeader.innerHTML = '<span>Script Steps</span><span style="font-weight:400;text-transform:none;letter-spacing:0">' + ((script.steps || []).length) + ' steps</span>';
+    left.appendChild(leftHeader);
+
+    var leftBody = document.createElement('div');
+    leftBody.className = 'panel-body';
+    var stepsContainer = document.createElement('div');
+    stepsContainer.className = 'steps-container';
+
+    // Compute indentation
+    var indentLevel = 0;
+    var decreaseBefore = { 70: true, 73: true }; // End If, End Loop
+    var decreaseThenIncrease = { 69: true, 125: true }; // Else, Else If
+    var increaseAfter = { 68: true, 71: true }; // If, Loop
+
+    (script.steps || []).forEach(function(step) {
+      var tid = step.step_type_id;
+
+      if (decreaseBefore[tid]) { indentLevel = Math.max(0, indentLevel - 1); }
+      if (decreaseThenIncrease[tid]) { indentLevel = Math.max(0, indentLevel - 1); }
+
+      var currentIndent = indentLevel;
+
+      if (increaseAfter[tid]) { indentLevel++; }
+      if (decreaseThenIncrease[tid]) { indentLevel++; }
+
+      var row = document.createElement('div');
+      row.className = 'step-row';
+      row.id = 'step-' + script.script_id + '-' + step.index;
+      if (!step.enabled) row.classList.add('disabled');
+
+      // Check for finding highlight
+      var finding = sStepMap[step.index];
+      if (finding) {
+        row.classList.add('finding-' + finding.severity);
+        row.classList.add('has-finding');
+        row.addEventListener('click', (function(fid) {
+          return function() {
+            var el = document.getElementById('finding-' + fid);
+            if (el) {
+              if (!el.classList.contains('expanded')) {
+                el.classList.add('expanded');
+                el.querySelector('.finding-card-body').style.display = 'block';
+              }
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          };
+        })(finding.id));
+      }
+
+      var lineno = document.createElement('div');
+      lineno.className = 'step-lineno';
+      lineno.textContent = step.index;
+      row.appendChild(lineno);
+
+      var code = document.createElement('div');
+      code.className = 'step-code';
+      var indentPad = '';
+      for (var i = 0; i < currentIndent; i++) indentPad += '    ';
+      code.innerHTML = indentPad + highlightSyntax(step.human_readable || step.step_name || '', tid);
+      row.appendChild(code);
+
+      stepsContainer.appendChild(row);
+    });
+
+    leftBody.appendChild(stepsContainer);
+    left.appendChild(leftBody);
+    main.appendChild(left);
+
+    // Right panel
+    var right = document.createElement('div');
+    right.className = 'panel-right';
+
+    var rightHeader = document.createElement('div');
+    rightHeader.className = 'panel-header';
+    rightHeader.innerHTML = '<span>Findings</span><span style="font-weight:400;text-transform:none;letter-spacing:0">' + sFindings.length + '</span>';
+    right.appendChild(rightHeader);
+
+    var rightBody = document.createElement('div');
+    rightBody.className = 'panel-body findings-body';
+
+    if (!sFindings.length) {
+      var noF = document.createElement('div');
+      noF.className = 'no-findings-msg';
+      noF.textContent = 'No findings for this script.';
+      rightBody.appendChild(noF);
+    } else {
+      sFindings.sort(function(a, b) {
+        return (severityOrder[a.severity] || 9) - (severityOrder[b.severity] || 9);
+      });
+      sFindings.forEach(function(f) {
+        rightBody.appendChild(buildFindingCard(f, script));
+      });
+    }
+
+    right.appendChild(rightBody);
+    main.appendChild(right);
+    app.appendChild(main);
+  }
+
+  // ── Finding Card Builder ───────────────────────────────────────
+
+  function buildFindingCard(f, script) {
+    var card = document.createElement('div');
+    card.className = 'finding-card';
+    card.id = 'finding-' + f.id;
+
+    // Header
+    var header = document.createElement('div');
+    header.className = 'finding-card-header';
+    header.innerHTML =
+      '<span class="severity-pill severity-' + esc(f.severity) + '">' + esc(f.severity) + '</span>' +
+      '<span class="finding-title">' + esc(f.title) + '</span>' +
+      '<span class="finding-expand-icon">&#9654;</span>';
+    header.addEventListener('click', function() {
+      card.classList.toggle('expanded');
+      var body = card.querySelector('.finding-card-body');
+      body.style.display = card.classList.contains('expanded') ? 'block' : 'none';
+    });
+    card.appendChild(header);
+
+    // Body
+    var body = document.createElement('div');
+    body.className = 'finding-card-body';
+
+    // Affected steps
+    var steps = (f.affected_steps || {})[String(script.script_id)] || [];
+    if (steps.length) {
+      var stepsDiv = document.createElement('div');
+      stepsDiv.className = 'finding-steps';
+      steps.forEach(function(idx) {
+        var badge = document.createElement('span');
+        badge.className = 'finding-step-badge';
+        badge.textContent = 'Step ' + idx;
+        badge.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var el = document.getElementById('step-' + script.script_id + '-' + idx);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+        stepsDiv.appendChild(badge);
+      });
+      body.appendChild(stepsDiv);
+    }
+
+    // Description
+    if (f.description) {
+      var desc = document.createElement('div');
+      desc.className = 'finding-description';
+      desc.textContent = f.description;
+      body.appendChild(desc);
+    }
+
+    // Best practice
+    if (f.best_practice) {
+      var bp = document.createElement('div');
+      bp.className = 'callout callout-best-practice';
+      bp.innerHTML = '<div class="callout-label">Best Practice</div><div>' + esc(f.best_practice) + '</div>';
+      body.appendChild(bp);
+    }
+
+    // Fix
+    var fix = (f.fix || {})[String(script.script_id)];
+    if (fix) {
+      if (f.fix_description) {
+        var fd = document.createElement('div');
+        fd.className = 'callout callout-fix';
+        fd.innerHTML = '<div class="callout-label">Proposed Fix</div><div>' + esc(f.fix_description) + '</div>';
+        body.appendChild(fd);
+      }
+
+      var diffContainer = document.createElement('div');
+      diffContainer.className = 'diff-container';
+
+      if (fix.before_human) {
+        var beforeBlock = document.createElement('div');
+        beforeBlock.className = 'diff-block diff-before';
+        beforeBlock.innerHTML =
+          '<div class="diff-header">Before</div>' +
+          '<div class="diff-code">' + esc(fix.before_human) + '</div>';
+        diffContainer.appendChild(beforeBlock);
+      }
+
+      if (fix.after_human) {
+        var afterBlock = document.createElement('div');
+        afterBlock.className = 'diff-block diff-after';
+        afterBlock.innerHTML =
+          '<div class="diff-header">After</div>' +
+          '<div class="diff-code">' + esc(fix.after_human) + '</div>';
+        diffContainer.appendChild(afterBlock);
+      }
+
+      if (fix.before_human || fix.after_human) {
+        body.appendChild(diffContainer);
+      }
+
+      // Simple "Copy Fix XML" button
+      if (fix.fix_xml) {
+        var copyBtn = document.createElement('button');
+        copyBtn.className = 'btn';
+        copyBtn.textContent = 'Copy Fix XML';
+        copyBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          copyToClipboard(fix.fix_xml, copyBtn);
+        });
+        body.appendChild(copyBtn);
+      }
+    }
+
+    card.appendChild(body);
+    return card;
+  }
+
+  // ── Syntax Highlighting ────────────────────────────────────────
+
+  function highlightSyntax(text, typeId) {
+    if (!text) return '';
+
+    // Comments
+    if (typeId === 89) {
+      return '<span class="syn-comment">' + esc(text) + '</span>';
+    }
+
+    // Control flow keywords
+    var controlTypes = { 68: true, 69: true, 70: true, 71: true, 73: true, 125: true };
+    // Exit Loop If = type 72
+    if (typeId === 72) {
+      return highlightExpr('<span class="syn-keyword">' + esc(text.split('[')[0]) + '</span>' +
+        (text.indexOf('[') >= 0 ? '[' + highlightExpression(text.slice(text.indexOf('[') + 1, text.lastIndexOf(']') >= 0 ? text.lastIndexOf(']') : text.length)) + ']' : ''));
+    }
+    if (controlTypes[typeId]) {
+      // e.g., "If [ condition ]" or just "End If", "Else"
+      var bracketIdx = text.indexOf('[');
+      if (bracketIdx >= 0) {
+        var keyword = text.substring(0, bracketIdx).trim();
+        var rest = text.substring(bracketIdx);
+        return '<span class="syn-keyword">' + esc(keyword) + '</span> ' + highlightBracketExpr(rest);
+      }
+      return '<span class="syn-keyword">' + esc(text) + '</span>';
+    }
+
+    // All other steps: highlight the step name, then expressions in brackets
+    return highlightStepLine(text);
+  }
+
+  function highlightStepLine(text) {
+    // Pattern: "Step Name [ expression ; expression ]" or just "Step Name"
+    var bracketIdx = text.indexOf('[');
+    if (bracketIdx < 0) {
+      return '<span class="syn-step">' + highlightInlineTokens(esc(text)) + '</span>';
+    }
+    var stepPart = text.substring(0, bracketIdx).trim();
+    var rest = text.substring(bracketIdx);
+    return '<span class="syn-step">' + esc(stepPart) + '</span> ' + highlightBracketExpr(rest);
+  }
+
+  function highlightBracketExpr(text) {
+    // text starts with [ and ends with ]
+    if (!text.startsWith('[')) return highlightExpression(text);
+    var inner = text.slice(1);
+    if (inner.endsWith(']')) inner = inner.slice(0, -1);
+    return '<span class="syn-operator">[</span> ' + highlightExpression(inner) + ' <span class="syn-operator">]</span>';
+  }
+
+  function highlightExpression(text) {
+    // Tokenize and highlight variables, functions, strings, numbers
+    var result = '';
+    var escaped = esc(text);
+
+    // Replace patterns in order: strings, variables, functions, numbers
+    // Strings: "..."
+    escaped = escaped.replace(/&quot;([^&]*?)&quot;/g, '<span class="syn-string">&quot;$1&quot;</span>');
+
+    // Variables: $$var or $var
+    escaped = escaped.replace(/(\$\$[\w.]+)/g, '<span class="syn-variable">$1</span>');
+    escaped = escaped.replace(/(\$[\w.]+)/g, function(match) {
+      // Don't re-wrap if already inside a span
+      if (match.indexOf('syn-variable') >= 0) return match;
+      return '<span class="syn-variable">' + match + '</span>';
+    });
+
+    // Functions: Word(
+    escaped = escaped.replace(/\b([A-Za-z_][\w]*)\s*\(/g, '<span class="syn-function">$1</span>(');
+
+    // Numbers
+    escaped = escaped.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="syn-number">$1</span>');
+
+    return escaped;
+  }
+
+  function highlightInlineTokens(escaped) {
+    // For step names, highlight embedded $vars
+    escaped = escaped.replace(/(\$\$[\w.]+)/g, '<span class="syn-variable">$1</span>');
+    escaped = escaped.replace(/(\$[\w.]+)/g, function(m) {
+      if (m.indexOf('syn-variable') >= 0) return m;
+      return '<span class="syn-variable">' + m + '</span>';
+    });
+    return escaped;
+  }
+
+  function highlightExpr(html) {
+    return html;
+  }
+
+  // ── Bottom Bar ─────────────────────────────────────────────────
+
+  function renderBottomBar() {
+    var bar = document.createElement('div');
+    bar.className = 'bottom-bar';
+
+    var barLeft = document.createElement('div');
+    barLeft.className = 'bottom-bar-left';
+
+    if (activeTab !== 'overview') {
+      var script = scripts.find(function(s) { return s.script_id === activeTab; });
+      if (script && script.full_xml) {
+        var copyXml = document.createElement('button');
+        copyXml.className = 'btn btn-primary';
+        copyXml.textContent = 'Copy Full Script XML';
+        copyXml.addEventListener('click', function() {
+          copyToClipboard(script.full_xml, copyXml);
+        });
+        barLeft.appendChild(copyXml);
+      }
+    }
+
+    var barRight = document.createElement('div');
+    barRight.className = 'bottom-bar-right';
+    barRight.textContent = meta.generated_at ? 'Generated: ' + meta.generated_at : '';
+
+    bar.appendChild(barLeft);
+    bar.appendChild(barRight);
+    app.appendChild(bar);
+  }
+
+  // ── Init ───────────────────────────────────────────────────────
+
+  render();
+
+})();
+</script>
+</body>
+</html>
