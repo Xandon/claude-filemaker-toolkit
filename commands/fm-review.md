@@ -66,9 +66,20 @@ The user wants to perform a code review on one or more FileMaker scripts and gen
    }
    ```
 
+   > **⚠ REQUIRED for the "Copy Fix XML" button to render:** every finding MUST
+   > include exactly one of `after_steps`, `fix_step_indices`, or `fix_xml`
+   > (at the finding top-level, or nested under `fix.<script_id>`). If none
+   > is present, the paste-to-FileMaker button is silently omitted and the
+   > user has no way to apply the fix via MBS. **`after_steps` is the
+   > preferred form** — it reads naturally in the HTML diff and the generator
+   > auto-builds the clipboard XML from it. Do NOT hand-author `before_human`
+   > or `after_human` directly; those are derived fields.
+
    **Key fields for code snippets in the HTML output:**
    - `step_indices` — which steps are affected (highlighted in the left panel)
-   - `after_steps` — recommended fix steps as human-readable FileMaker notation (see format below)
+   - `after_steps` — recommended fix steps as human-readable FileMaker notation (see format below) — **REQUIRED unless you supply `fix_step_indices` or `fix_xml`**
+   - `fix_step_indices` — alternative to `after_steps`: pick/reorder existing steps from the script by index (generator copies their raw XML)
+   - `fix_xml` — alternative to `after_steps`: pre-authored clipboard `fmxmlsnippet` XML used as-is
    - `fix_description` — plain English explanation of the fix
    - `best_practice` — the general principle behind the recommendation
 
