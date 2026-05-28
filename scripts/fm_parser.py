@@ -95,7 +95,6 @@ def create_db(db_path):
         enabled INTEGER DEFAULT 1,
         raw_xml TEXT,
         human_readable TEXT,
-        step_hash TEXT,
         FOREIGN KEY(file_id) REFERENCES files(id)
     );
 
@@ -213,28 +212,6 @@ def create_db(db_path):
         FOREIGN KEY(file_id) REFERENCES files(id)
     );
 
-    CREATE TABLE IF NOT EXISTS table_occurrences (
-        id INTEGER PRIMARY KEY,
-        file_id INTEGER,
-        to_id INTEGER,
-        name TEXT,
-        uuid TEXT,
-        base_table_id INTEGER,
-        base_table_name TEXT,
-        view TEXT,
-        height INTEGER,
-        coord_top INTEGER,
-        coord_left INTEGER,
-        coord_bottom INTEGER,
-        coord_right INTEGER,
-        color_r INTEGER DEFAULT 128,
-        color_g INTEGER DEFAULT 128,
-        color_b INTEGER DEFAULT 128,
-        FOREIGN KEY(file_id) REFERENCES files(id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_table_occ_name ON table_occurrences(name);
-    CREATE INDEX IF NOT EXISTS idx_table_occ_base ON table_occurrences(base_table_name);
     CREATE INDEX IF NOT EXISTS idx_scripts_name ON scripts(name);
     CREATE INDEX IF NOT EXISTS idx_cf_refs_cf ON cf_references(cf_name);
     CREATE INDEX IF NOT EXISTS idx_cf_refs_script ON cf_references(script_id);
@@ -746,22 +723,6 @@ def index_file(xml_path, db_path):
     fm_version = root.get('Source', '')
     fm_locale = root.get('locale', '')
 
-    # --- Idempotent re-index: remove any existing data for this file ---
-    c.execute("SELECT id FROM files WHERE filename=?", (fm_file,))
-    existing = c.fetchone()
-    if existing:
-        old_fid = existing[0]
-        for tbl in ['tables_def', 'fields', 'scripts', 'script_steps', 'layouts',
-                     'relationships', 'value_lists', 'script_references', 'field_references',
-                     'layout_references', 'external_data_sources', 'custom_functions',
-                     'cf_references', 'table_occurrences']:
-            try:
-                c.execute(f"DELETE FROM {tbl} WHERE file_id=?", (old_fid,))
-            except sqlite3.OperationalError:
-                pass  # table may not exist yet (first run with new schema)
-        c.execute("DELETE FROM files WHERE id=?", (old_fid,))
-        conn.commit()
-
     c.execute("INSERT INTO files (filename, filepath, uuid, fm_version, locale, indexed_at) VALUES (?,?,?,?,?,datetime('now'))",
               (fm_file, xml_path, fm_uuid, fm_version, fm_locale))
     file_id = c.lastrowid
@@ -1019,69 +980,6 @@ def index_file(xml_path, db_path):
                     (file_id, cfid, cfname, cfuuid, cfdisplay, param_count, cfparams, cfcalc))
                 cf_names.append((cfid, cfname))
 
-        # --- Custom Function Calculation Bodies (FM 22+) ---
-        # FM 22 stores CF bodies in a separate CalcsForCustomFunctions section
-        for cfc_section in add_action.findall('.//CalcsForCustomFunctions'):
-            obj_list = cfc_section.find('ObjectList')
-            if obj_list is None:
-                continue
-            for calc_item in obj_list.findall('CustomFunctionCalc'):
-                ref = calc_item.find('CustomFunctionReference')
-                if ref is None:
-                    continue
-                cf_id_val = int(ref.get('id', 0))
-                calc_text_elem = calc_item.find('.//Calculation/Text')
-                if calc_text_elem is not None and calc_text_elem.text:
-                    body = calc_text_elem.text.strip()
-                    c.execute("UPDATE custom_functions SET calculation_text=? WHERE file_id=? AND cf_id=?",
-                              (body, file_id, cf_id_val))
-
-        # --- Table Occurrences (FM 22+) ---
-        for toc in add_action.findall('.//TableOccurrenceCatalog'):
-            for to_elem in toc.findall('TableOccurrence'):
-                to_id = int(to_elem.get('id', 0))
-                to_name = to_elem.get('name', '')
-                to_view = to_elem.get('View', '')
-                to_height = int(to_elem.get('height', 0)) if to_elem.get('height') else 0
-
-                to_uuid = ''
-                uuid_elem = to_elem.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    to_uuid = uuid_elem.text.strip()
-
-                bt_id = 0
-                bt_name = ''
-                bt_src = to_elem.find('BaseTableSourceReference')
-                if bt_src is not None:
-                    bt_ref = bt_src.find('BaseTableReference')
-                    if bt_ref is not None:
-                        bt_id = int(bt_ref.get('id', 0))
-                        bt_name = bt_ref.get('name', '')
-
-                # Extract coordinates from <CoordRect>
-                coord_top = coord_left = coord_bottom = coord_right = 0
-                coord_elem = to_elem.find('CoordRect')
-                if coord_elem is not None:
-                    coord_top = int(coord_elem.get('top', 0))
-                    coord_left = int(coord_elem.get('left', 0))
-                    coord_bottom = int(coord_elem.get('bottom', 0))
-                    coord_right = int(coord_elem.get('right', 0))
-
-                # Extract color from <Color>
-                color_r = color_g = color_b = 128
-                color_elem = to_elem.find('Color')
-                if color_elem is not None:
-                    color_r = int(float(color_elem.get('red', 128)))
-                    color_g = int(float(color_elem.get('green', 128)))
-                    color_b = int(float(color_elem.get('blue', 128)))
-
-                c.execute("""INSERT INTO table_occurrences
-                    (file_id, to_id, name, uuid, base_table_id, base_table_name, view, height,
-                     coord_top, coord_left, coord_bottom, coord_right, color_r, color_g, color_b)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (file_id, to_id, to_name, to_uuid, bt_id, bt_name, to_view, to_height,
-                     coord_top, coord_left, coord_bottom, coord_right, color_r, color_g, color_b))
-
         # --- Script Steps ---
         for sfs in add_action.findall('.//StepsForScripts'):
             for script_block in sfs.findall('Script'):
@@ -1106,7 +1004,6 @@ def index_file(xml_path, db_path):
                     step_type_id = int(step.get('id', 0))
                     step_name_val = step.get('name', '')
                     step_enabled = 1 if step.get('enable', 'True') == 'True' else 0
-                    step_hash_val = step.get('hash', '')
 
                     # Store raw XML
                     raw_xml = ET.tostring(step, encoding='unicode')
@@ -1116,10 +1013,10 @@ def index_file(xml_path, db_path):
 
                     c.execute("""INSERT INTO script_steps
                         (file_id, script_id, script_name, step_index, step_type_id, step_name,
-                         enabled, raw_xml, human_readable, step_hash)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                         enabled, raw_xml, human_readable)
+                        VALUES (?,?,?,?,?,?,?,?,?)""",
                         (file_id, sid, sname, step_idx, step_type_id, step_name_val,
-                         step_enabled, raw_xml, human, step_hash_val))
+                         step_enabled, raw_xml, human))
 
                     # Extract script references from Perform Script steps
                     for sr in step.findall('.//ScriptReference'):
@@ -1154,74 +1051,6 @@ def index_file(xml_path, db_path):
                              table_occurrence, table_occurrence_id, context)
                             VALUES (?,?,?,?,?,?,?,?,?)""",
                             (file_id, 'script', sid, sname, frid, frname, toname, toid, 'script_step'))
-
-    # --- Process ModifyAction sections (FM 22+) ---
-    # ModifyAction contains modified field definitions (calculations) and layout changes
-    for modify_action in structure.findall('ModifyAction'):
-        # Update fields with calculation text from ModifyAction
-        for fft in modify_action.findall('.//FieldsForTables'):
-            for fc in fft.findall('FieldCatalog'):
-                bt = fc.find('BaseTableReference')
-                if bt is None:
-                    continue
-                mod_table_name = bt.get('name', '')
-                mod_table_id = int(bt.get('id', 0))
-
-                obj_list = fc.find('ObjectList')
-                if obj_list is None:
-                    continue
-
-                for field in obj_list.findall('Field'):
-                    mod_fid = int(field.get('id', 0))
-                    mod_fname = field.get('name', '')
-                    mod_ftype = field.get('fieldtype', '')
-                    mod_dtype = field.get('datatype', '')
-                    mod_comment = field.get('comment', '')
-
-                    # Extract calculation text
-                    mod_calc = ''
-                    calc_elem = field.find('.//Calculation/Text')
-                    if calc_elem is not None and calc_elem.text:
-                        mod_calc = calc_elem.text.strip()
-
-                    # Try to UPDATE existing field record first
-                    if mod_calc:
-                        c.execute("""UPDATE fields SET calculation_text=?
-                                     WHERE file_id=? AND table_id=? AND field_id=?""",
-                                  (mod_calc, file_id, mod_table_id, mod_fid))
-
-                    # If field doesn't exist yet (only in ModifyAction), INSERT it
-                    if c.rowcount == 0:
-                        mod_uuid = ''
-                        uuid_elem = field.find('UUID')
-                        if uuid_elem is not None and uuid_elem.text:
-                            mod_uuid = uuid_elem.text.strip()
-
-                        is_global = 0
-                        max_rep = 1
-                        storage = field.find('Storage')
-                        if storage is not None:
-                            is_global = 1 if storage.get('global') == 'True' else 0
-                            max_rep = int(storage.get('maxRepetitions', 1)) if storage.get('maxRepetitions') else 1
-
-                        auto_enter = ''
-                        ae = field.find('AutoEnter')
-                        if ae is not None:
-                            auto_enter = ae.get('type', '')
-
-                        validation = ''
-                        val = field.find('Validation')
-                        if val is not None:
-                            validation = val.get('type', '')
-
-                        c.execute("""INSERT INTO fields
-                            (file_id, table_id, table_name, field_id, name, fieldtype, datatype,
-                             comment, uuid, is_global, max_repetitions, auto_enter_type,
-                             validation_type, calculation_text)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (file_id, mod_table_id, mod_table_name, mod_fid, mod_fname,
-                             mod_ftype, mod_dtype, mod_comment, mod_uuid, is_global, max_rep,
-                             auto_enter, validation, mod_calc))
 
     # --- Cross-reference custom functions in script steps ---
     if cf_names:
@@ -1274,12 +1103,6 @@ def index_file(xml_path, db_path):
     c.execute("SELECT COUNT(*) FROM script_references WHERE file_id=?", (file_id,))
     ref_count = c.fetchone()[0]
 
-    # Table occurrences and CF bodies
-    c.execute("SELECT COUNT(*) FROM table_occurrences WHERE file_id=?", (file_id,))
-    to_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM custom_functions WHERE file_id=? AND calculation_text IS NOT NULL AND calculation_text != ''", (file_id,))
-    cf_body_count = c.fetchone()[0]
-
     elapsed = time.time() - start
     print(f"\nIndexed {fm_file} in {elapsed:.1f}s:")
     print(f"  Tables:        {table_count}")
@@ -1288,9 +1111,8 @@ def index_file(xml_path, db_path):
     print(f"  Script Steps:  {step_count}")
     print(f"  Layouts:       {layout_count}")
     print(f"  Relationships: {rel_count}")
-    print(f"  Table Occs:    {to_count}")
     print(f"  Cross-refs:    {ref_count}")
-    print(f"  Custom Funcs:  {cf_count} ({cf_body_count} with bodies)")
+    print(f"  Custom Funcs:  {cf_count}")
     print(f"  CF References: {cf_ref_count}")
     print(f"\nDatabase saved to: {db_path}")
 

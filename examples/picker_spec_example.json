@@ -1,0 +1,45 @@
+{
+  "meta": {
+    "title": "Fungal Picker Scripts",
+    "author": "Xandon Frogget",
+    "date": "2026-05-15",
+    "notes": "Paste order matters: Open Card Window → Toggle Selection → Add to Mold Elements → Cancel. JSON in FileMaker strips text styling — see Stage 1 of the Add script for the rich-text workaround."
+  },
+  "scripts": [
+    {
+      "name": "Fungal Picker — Open Card Window",
+      "called_from": "Button on \"Mold Air DE\" (TO: Mold Layers)",
+      "steps": [
+        { "type": "comment", "text": "---------------------------------------------------------------------------" },
+        { "type": "comment", "text": "  Purpose:    Open the Fungal Species picker as a card window over Mold Air DE." },
+        { "type": "comment", "text": "  Called From: Button on layout \"Mold Air DE\" (TO: Mold Layers)" },
+        { "type": "comment", "text": "  Author:     Xandon Frogget" },
+        { "type": "comment", "text": "  Created:    2026-05-15" },
+        { "type": "comment", "text": "  Parameter:  (none) — current Mold Layers record provides Layer ID" },
+        { "type": "comment", "text": "---------------------------------------------------------------------------" },
+        { "type": "comment" },
+        { "type": "comment", "text": "guard: only fire from the Mold Layers context" },
+        { "type": "if",   "calc": "Get ( layoutTableName ) ≠ \"Mold Layers\"" },
+        { "type": "show_dialog",
+          "title":   "\"Picker\"",
+          "message": "\"Open this picker from the Mold Air DE layout.\"" },
+        { "type": "exit_script" },
+        { "type": "end_if" },
+        { "type": "comment" },
+        { "type": "comment", "text": "capture parent context" },
+        { "type": "set_variable", "name": "$$FUNGAL_PICKER_LAYER_ID", "calc": "Mold Layers::Layer ID" },
+        { "type": "set_variable", "name": "$$FUNGAL_PICKER_IDS",      "calc": "\"\"" },
+        { "type": "set_variable", "name": "$$FUNGAL_PICKER_JSON",     "calc": "\"[]\"" },
+        { "type": "comment" },
+        { "type": "comment", "text": "open the card window" },
+        { "type": "new_card_window",
+          "name":   "\"Pick Fungal Species\"",
+          "layout": "Fungal Species_Air Fungal Spores - Picker",
+          "height": 700, "width": 540, "top": 80, "left": 120 },
+        { "type": "show_all_records" },
+        { "type": "go_to_record", "target": "First" },
+        { "type": "refresh_window", "flush": true }
+      ]
+    }
+  ]
+}

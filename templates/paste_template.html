@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/*__PAGE_TITLE__*/FileMaker Scripts</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #1e1e2e;
+  color: #e0e0e0;
+  min-height: 100vh;
+  padding: 24px 32px 80px;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1e1e2e; }
+::-webkit-scrollbar-thumb { background: #484868; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #5a5a7a; }
+
+header.page {
+  border-bottom: 1px solid #3a3a5c;
+  padding-bottom: 18px;
+  margin-bottom: 28px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+header.page h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+header.page p {
+  font-size: 0.88rem;
+  color: #9090b0;
+  max-width: 640px;
+  line-height: 1.5;
+}
+.meta-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pill {
+  background: #2a2a44;
+  border: 1px solid #3a3a5c;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: #b0b0d0;
+}
+
+.notice {
+  background: #2d2515;
+  border: 1px solid #6e5520;
+  border-left: 3px solid #f0b340;
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin-bottom: 28px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: #f0d090;
+}
+.notice b { color: #ffd070; }
+.notice code {
+  background: #1a1a2c;
+  color: #ffd070;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.notice.hidden { display: none; }
+
+.script-card {
+  background: #252538;
+  border: 1px solid #3a3a5c;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+.script-card.extracted { border-left: 3px solid #5e9cf0; }
+.script-card.authored  { border-left: 3px solid #b06ef0; }
+
+.script-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #2c2c46;
+  padding: 14px 20px;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #3a3a5c;
+}
+.script-head .left { display: flex; flex-direction: column; gap: 3px; }
+.script-head .name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f0f0ff;
+}
+.script-head .sub {
+  font-size: 0.78rem;
+  color: #8888aa;
+}
+.script-head .right { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.badge.extracted { background: #1c3552; color: #9bc7ff; }
+.badge.authored  { background: #3b1e4f; color: #d3a0ff; }
+
+.btn {
+  background: #3a3a5c;
+  border: 1px solid #4a4a6c;
+  color: #e0e0e0;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.btn:hover { background: #4a4a6c; border-color: #5a5a7c; }
+.btn-primary {
+  background: #5e6cf0;
+  border-color: #6e7cff;
+  color: #ffffff;
+}
+.btn-primary:hover { background: #6e7cff; }
+.btn.copied {
+  background: #2e8b57;
+  border-color: #3a9c66;
+  color: #ffffff;
+}
+
+.script-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.script-body.xml-only { grid-template-columns: 1fr; }
+@media (max-width: 1100px) {
+  .script-body { grid-template-columns: 1fr; }
+}
+
+.panel {
+  padding: 16px 18px;
+  border-right: 1px solid #3a3a5c;
+}
+.panel:last-child { border-right: none; }
+.panel-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6a6a90;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+pre {
+  background: #16162a;
+  border: 1px solid #2e2e48;
+  border-radius: 4px;
+  padding: 12px 14px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: #d0d0e8;
+  overflow-x: auto;
+  max-height: 580px;
+  overflow-y: auto;
+  white-space: pre;
+  tab-size: 4;
+}
+pre.xml { color: #b8c0e0; font-size: 0.72rem; line-height: 1.4; }
+pre.xml .tag { color: #79c0ff; }
+pre.xml .attr { color: #c0c08a; }
+pre.xml .cdata { color: #98c379; }
+pre.xml .comment { color: #6e7080; }
+
+.footnote {
+  margin-top: 36px;
+  padding-top: 18px;
+  border-top: 1px solid #2e2e48;
+  font-size: 0.78rem;
+  color: #7a7a98;
+  line-height: 1.55;
+}
+.footnote code {
+  background: #1a1a2c;
+  color: #d0d0e8;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: #2e8b57;
+  color: white;
+  padding: 10px 22px;
+  border-radius: 22px;
+  font-size: 0.88rem;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  transition: transform 0.25s ease;
+  pointer-events: none;
+  z-index: 1000;
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<header class="page">
+  <div>
+    <h1 id="pageTitle">FileMaker Scripts</h1>
+    <p>
+      Click <b>Copy XML</b> on any card, then in FileMaker open the target script in
+      Script Workspace and paste (⌘V / Ctrl+V). FileMaker 18+ materializes the
+      steps directly &mdash; MBS plugin is not required.
+    </p>
+  </div>
+  <div class="meta-pills" id="metaPills"></div>
+</header>
+
+<div class="notice" id="notice">
+  <b>Paste order matters.</b> When scripts call each other, create them in
+  the order shown so the cross-references resolve cleanly.
+</div>
+
+<div id="scriptsRoot"></div>
+
+<div class="footnote">
+  <p><b>If FileMaker says &ldquo;Steps were not pasted because they require objects that don&rsquo;t exist&rdquo;:</b>
+  the field, layout, or TO IDs embedded in the XML don&rsquo;t match this copy of
+  the solution. FileMaker falls back to name matching, so most near-misses still
+  paste &mdash; but renamed TOs or missing layouts produce that error. Regenerate
+  this file from a fresh DDR index if the schema has shifted.</p>
+</div>
+
+<div id="toast" class="toast">Copied to clipboard</div>
+
+<script>
+const SCRIPTS = /*__SCRIPTS_DATA__*/[];
+const META    = /*__META__*/{};
+const OPTIONS = /*__OPTIONS__*/{};
+
+function syntaxHighlightXML(xml) {
+  return xml
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/(&lt;!\[CDATA\[)([\s\S]*?)(\]\]&gt;)/g,
+      '<span class="cdata">$1$2$3</span>')
+    .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/g,
+      '$1<span class="tag">$2</span>')
+    .replace(/(\s)([A-Za-z][\w:-]*)=(&quot;[^&]*&quot;)/g,
+      '$1<span class="attr">$2</span>=$3');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function copyToClipboard(text, buttonEl, label) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = buttonEl.textContent;
+    buttonEl.textContent = 'Copied!';
+    buttonEl.classList.add('copied');
+    showToast(label + ' copied — paste into FileMaker Script Workspace');
+    setTimeout(() => {
+      buttonEl.textContent = orig;
+      buttonEl.classList.remove('copied');
+    }, 1800);
+  }).catch(err => {
+    showToast('Copy failed — select text manually');
+    console.error(err);
+  });
+}
+
+function buildCard(s) {
+  const card = document.createElement('div');
+  card.className = 'script-card ' + (s.mode || 'extracted');
+  const showHuman = OPTIONS.include_human !== false && s.human;
+  const bodyCls = showHuman ? 'script-body' : 'script-body xml-only';
+
+  const humanPanel = showHuman ? `
+      <div class="panel">
+        <div class="panel-label">Human-Readable</div>
+        <pre class="human"></pre>
+      </div>` : '';
+
+  const copyHumanBtn = showHuman ? `
+        <button class="btn copy-human">Copy Pseudocode</button>` : '';
+
+  const modeBadge = s.mode === 'authored'
+      ? '<span class="badge authored">new</span>'
+      : '<span class="badge extracted">existing</span>';
+
+  card.innerHTML = `
+    <div class="script-head">
+      <div class="left">
+        <span class="name">${s.name} ${modeBadge}</span>
+        <span class="sub">${s.called_from || ''}${s.called_from ? ' · ' : ''}${s.step_count} step${s.step_count === 1 ? '' : 's'}</span>
+      </div>
+      <div class="right">
+        <button class="btn btn-primary copy-xml">Copy XML</button>${copyHumanBtn}
+      </div>
+    </div>
+    <div class="${bodyCls}">
+      ${humanPanel}
+      <div class="panel">
+        <div class="panel-label">Clipboard XML (paste into FileMaker Script Workspace)</div>
+        <pre class="xml"></pre>
+      </div>
+    </div>
+  `;
+  if (showHuman) card.querySelector('pre.human').textContent = s.human;
+  card.querySelector('pre.xml').innerHTML = syntaxHighlightXML(s.xml);
+  card.querySelector('.copy-xml').addEventListener('click', e => {
+    copyToClipboard(s.xml, e.currentTarget, s.name + ' XML');
+  });
+  if (showHuman) {
+    card.querySelector('.copy-human').addEventListener('click', e => {
+      copyToClipboard(s.human, e.currentTarget, s.name + ' pseudocode');
+    });
+  }
+  return card;
+}
+
+// Page title
+if (META.title) {
+  document.getElementById('pageTitle').textContent = META.title;
+  document.title = META.title;
+}
+
+// Meta pills
+const pills = document.getElementById('metaPills');
+(META.pills || []).forEach(p => {
+  const el = document.createElement('span');
+  el.className = 'pill';
+  el.textContent = p;
+  pills.appendChild(el);
+});
+
+// Notice
+const notice = document.getElementById('notice');
+if (META.notice) {
+  notice.innerHTML = META.notice;
+} else {
+  notice.classList.add('hidden');
+}
+
+// Cards
+const root = document.getElementById('scriptsRoot');
+SCRIPTS.forEach(s => root.appendChild(buildCard(s)));
+</script>
+
+</body>
+</html>

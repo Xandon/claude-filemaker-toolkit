@@ -295,6 +295,18 @@ body {
 
 /* Diff view */
 .diff-container { margin-bottom: 12px; }
+.fix-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.fix-actions-note {
+  font-size: 0.72rem;
+  color: #8888aa;
+  font-style: italic;
+}
 .diff-block {
   border-radius: 6px;
   overflow: hidden;
@@ -339,21 +351,13 @@ body {
 }
 .btn:hover { background: #3a3a5c; color: #e0e0e0; }
 .btn.copied { background: #2a5a3a; border-color: #4ec9b0; color: #4ec9b0; }
+.btn.copy-error { background: #5a2a2a; border-color: #ff6b7a; color: #ff6b7a; }
 .btn-primary {
   background: rgba(124,138,255,0.15);
   border-color: #7c8aff;
   color: #7c8aff;
 }
 .btn-primary:hover { background: rgba(124,138,255,0.25); }
-.btn-disabled,
-.btn-disabled:hover {
-  opacity: 0.45;
-  cursor: not-allowed;
-  border-style: dashed;
-  background: #2a2a3e;
-  color: #c0c0d8;
-}
-
 
 /* ── Overview Tab ────────────────────────────────────────────────── */
 .overview-container {
@@ -412,6 +416,7 @@ body {
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
+  align-items: center;
   font-size: 0.78rem;
   color: #8888aa;
   flex-shrink: 0;
@@ -419,6 +424,13 @@ body {
 .script-info-item { display: flex; align-items: center; gap: 5px; }
 .script-info-label { color: #606080; }
 .script-info-value { color: #c0c0d8; }
+.script-info-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.script-info-actions .btn { font-size: 0.78rem; padding: 4px 12px; }
 
 /* ── Custom Functions Panel ──────────────────────────────────────── */
 .cf-panel {
@@ -492,37 +504,6 @@ body {
 .cf-chip:hover .cf-tooltip { display: block; }
 .cf-tooltip-sig { font-family: 'SF Mono', SFMono-Regular, Menlo, monospace; color: #e0e0e0; margin-bottom: 3px; }
 .cf-tooltip-meta { color: #8888aa; font-size: 0.65rem; }
-.cf-tooltip-body {
-  font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
-  background: #1a1a30;
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 8px;
-  border-radius: 4px;
-  margin-top: 6px;
-  font-size: 0.8rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #c0c0d8;
-}
-.cf-expanded-body {
-  display: none;
-  background: #1a1a30;
-  border: 1px solid #3a3a5c;
-  border-radius: 6px;
-  padding: 12px;
-  margin-top: 8px;
-  font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  color: #c0c0d8;
-  overflow-x: auto;
-}
-.cf-expanded-body.expanded { display: block; }
-.cf-expanded-body pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 
 /* ── Flash animation for scroll-to ──────────────────────────────── */
 @keyframes flash-highlight {
@@ -641,15 +622,43 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
   }
 
   function copyToClipboard(text, buttonEl) {
-    navigator.clipboard.writeText(text).then(function() {
+    function showFeedback(label, isError) {
       var orig = buttonEl.textContent;
-      buttonEl.textContent = 'Copied!';
-      buttonEl.classList.add('copied');
+      buttonEl.textContent = label;
+      buttonEl.classList.add(isError ? 'copy-error' : 'copied');
       setTimeout(function() {
         buttonEl.textContent = orig;
         buttonEl.classList.remove('copied');
+        buttonEl.classList.remove('copy-error');
       }, 2000);
-    });
+    }
+    function legacyFallback() {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        showFeedback(ok ? 'Copied!' : 'Copy failed', !ok);
+      } catch (e) {
+        console.error('Clipboard fallback failed:', e);
+        showFeedback('Copy failed', true);
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() {
+        showFeedback('Copied!', false);
+      }).catch(function(err) {
+        console.warn('navigator.clipboard failed, trying legacy fallback:', err);
+        legacyFallback();
+      });
+    } else {
+      legacyFallback();
+    }
   }
 
   // Severity ordering
@@ -968,6 +977,35 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
       d.innerHTML = '<span class="script-info-label">' + esc(it.label) + ':</span> <span class="script-info-value">' + esc(String(it.value)) + '</span>';
       info.appendChild(d);
     });
+
+    // Right-side action buttons. Always visible at the top of the script view.
+    if (script.full_xml) {
+      var actions = document.createElement('div');
+      actions.className = 'script-info-actions';
+
+      var copyXmlTop = document.createElement('button');
+      copyXmlTop.className = 'btn btn-primary';
+      copyXmlTop.textContent = 'Copy Script XML';
+      copyXmlTop.title = 'Copy clipboard XML for the whole script (paste into Script Workspace)';
+      copyXmlTop.addEventListener('click', function() {
+        copyToClipboard(script.full_xml, copyXmlTop);
+      });
+      actions.appendChild(copyXmlTop);
+
+      if (script.steps && script.steps.length) {
+        var copyPseudo = document.createElement('button');
+        copyPseudo.className = 'btn';
+        copyPseudo.textContent = 'Copy Pseudocode';
+        copyPseudo.title = 'Copy human-readable pseudocode for the whole script';
+        copyPseudo.addEventListener('click', function() {
+          var lines = script.steps.map(function(s) { return s.human_readable || ''; });
+          copyToClipboard(lines.join('\n'), copyPseudo);
+        });
+        actions.appendChild(copyPseudo);
+      }
+
+      info.appendChild(actions);
+    }
     app.appendChild(info);
 
     // Custom Functions panel
@@ -1013,74 +1051,17 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
         }
         tooltipHtml += '<div class="cf-tooltip-meta">Used by ' + cf.used_by_scripts + ' scripts in solution</div>';
         tooltipHtml += '<div class="cf-tooltip-meta">Steps in this script: ' + cf.steps.join(', ') + '</div>';
-        if (cf.body) {
-          tooltipHtml += '<pre class="cf-tooltip-body">' + esc(cf.body) + '</pre>';
-        }
         tooltip.innerHTML = tooltipHtml;
         chip.appendChild(tooltip);
 
-        // Click handler: toggle expanded body panel
+        // Click to scroll to first step
         chip.style.cursor = 'pointer';
-        chip.addEventListener('click', function(e) {
-          // Check if a "goto" icon was clicked; if so, just scroll to step
-          if (e.target && e.target.classList && e.target.classList.contains('cf-goto')) {
-            var el = document.getElementById('step-' + script.script_id + '-' + cf.steps[0]);
-            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 1500); }
-            return;
-          }
-          // Otherwise, toggle the expanded body panel
-          var expandedId = 'cf-expanded-' + script.script_id + '-' + cf.name.replace(/[^a-z0-9_-]/gi, '_');
-          var expandedPanel = document.getElementById(expandedId);
-          if (expandedPanel) {
-            expandedPanel.classList.toggle('expanded');
-          }
+        chip.addEventListener('click', function() {
+          var el = document.getElementById('step-' + script.script_id + '-' + cf.steps[0]);
+          if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 1500); }
         });
 
         cfBody.appendChild(chip);
-
-        // Create expanded body panel if CF has a body
-        if (cf.body) {
-          var expandedId = 'cf-expanded-' + script.script_id + '-' + cf.name.replace(/[^a-z0-9_-]/gi, '_');
-          var expandedPanel = document.createElement('div');
-          expandedPanel.id = expandedId;
-          expandedPanel.className = 'cf-expanded-body';
-
-          // Create header with copy button
-          var bodyHeader = document.createElement('div');
-          bodyHeader.style.display = 'flex';
-          bodyHeader.style.justifyContent = 'space-between';
-          bodyHeader.style.alignItems = 'center';
-          bodyHeader.style.marginBottom = '8px';
-          bodyHeader.style.paddingBottom = '8px';
-          bodyHeader.style.borderBottom = '1px solid #3a3a5c';
-
-          var bodyLabel = document.createElement('div');
-          bodyLabel.style.fontSize = '0.7rem';
-          bodyLabel.style.fontWeight = '600';
-          bodyLabel.style.textTransform = 'uppercase';
-          bodyLabel.style.letterSpacing = '0.05em';
-          bodyLabel.style.color = '#8888aa';
-          bodyLabel.textContent = 'Calculation Body';
-          bodyHeader.appendChild(bodyLabel);
-
-          var copyBtn = document.createElement('button');
-          copyBtn.className = 'btn';
-          copyBtn.textContent = 'Copy Body';
-          copyBtn.style.fontSize = '0.7rem';
-          copyBtn.style.padding = '4px 10px';
-          copyBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            copyToClipboard(cf.body, copyBtn);
-          });
-          bodyHeader.appendChild(copyBtn);
-
-          expandedPanel.appendChild(bodyHeader);
-
-          var preEl = document.createElement('pre');
-          preEl.textContent = cf.body;
-          expandedPanel.appendChild(preEl);
-          cfBody.appendChild(expandedPanel);
-        }
       });
 
       cfHeader.addEventListener('click', function() {
@@ -1293,33 +1274,51 @@ window.REVIEW_DATA = /*__REVIEW_DATA__*/{};
         diffContainer.appendChild(afterBlock);
       }
 
-      if (fix.before_human || fix.after_human) {
-        body.appendChild(diffContainer);
-      }
+      body.appendChild(diffContainer);
 
-      // "Copy Fix XML" button — rendered enabled when we have paste-ready XML,
-      // or as a disabled placeholder with a tooltip when the review JSON only
-      // supplied before_human/after_human. The disabled state makes the gap
-      // visible instead of silently omitting the button.
-      if (fix.fix_xml) {
-        var copyBtn = document.createElement('button');
-        copyBtn.className = 'btn';
-        copyBtn.textContent = 'Copy Fix XML';
-        copyBtn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          copyToClipboard(fix.fix_xml, copyBtn);
-        });
-        body.appendChild(copyBtn);
-      } else if (fix.before_human || fix.after_human) {
-        var disabledBtn = document.createElement('button');
-        disabledBtn.className = 'btn btn-disabled';
-        disabledBtn.textContent = 'Copy Fix XML';
-        disabledBtn.disabled = true;
-        disabledBtn.title =
-          'No paste-ready XML for this fix — the review JSON is missing ' +
-          '"after_steps", "fix_step_indices", or "fix_xml". See the fix ' +
-          'description above for the intended change.';
-        body.appendChild(disabledBtn);
+      // Copy Fix button row. Whenever the user can SEE an AFTER block, give
+      // them a one-click way to take it with them — pasteable XML if we have
+      // it, otherwise the pseudocode they can hand-translate.
+      if (fix.fix_xml || fix.after_human) {
+        var fixActions = document.createElement('div');
+        fixActions.className = 'fix-actions';
+
+        if (fix.fix_xml) {
+          var copyXml = document.createElement('button');
+          copyXml.className = 'btn btn-primary';
+          copyXml.textContent = 'Copy Fix XML';
+          copyXml.title = 'Paste-ready clipboard XML for FileMaker Script Workspace';
+          copyXml.addEventListener('click', function(e) {
+            e.stopPropagation();
+            copyToClipboard(fix.fix_xml, copyXml);
+          });
+          fixActions.appendChild(copyXml);
+        }
+
+        if (fix.after_human) {
+          var copyText = document.createElement('button');
+          copyText.className = 'btn';
+          // If we don't have XML, this is the user's only paste payload — make it primary.
+          if (!fix.fix_xml) copyText.classList.add('btn-primary');
+          copyText.textContent = fix.fix_xml ? 'Copy Fix Text' : 'Copy Fix Text';
+          copyText.title = fix.fix_xml
+            ? 'Copy the AFTER block as plain text (for docs / comments)'
+            : 'No paste-ready XML — copy the AFTER text and rebuild the steps by hand in Script Workspace';
+          copyText.addEventListener('click', function(e) {
+            e.stopPropagation();
+            copyToClipboard(fix.after_human, copyText);
+          });
+          fixActions.appendChild(copyText);
+
+          if (!fix.fix_xml) {
+            var note = document.createElement('span');
+            note.className = 'fix-actions-note';
+            note.textContent = 'Text only — paste-ready XML wasn’t authored for this fix. Ask Claude to regenerate with after_steps.';
+            fixActions.appendChild(note);
+          }
+        }
+
+        body.appendChild(fixActions);
       }
     }
 

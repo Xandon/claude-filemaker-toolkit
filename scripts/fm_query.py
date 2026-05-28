@@ -465,72 +465,6 @@ def cmd_value_lists(conn):
         print(f"  [{r['vl_id']}] {r['name']}")
 
 
-def cmd_table_occurrences(conn, pattern=None):
-    """List table occurrences, optionally filtered by name pattern."""
-    c = conn.cursor()
-    try:
-        if pattern:
-            c.execute("""SELECT to_id, name, base_table_name, base_table_id
-                         FROM table_occurrences WHERE name LIKE ? ORDER BY name""",
-                      (f'%{pattern}%',))
-        else:
-            c.execute("""SELECT to_id, name, base_table_name, base_table_id
-                         FROM table_occurrences ORDER BY name""")
-        rows = c.fetchall()
-        if not rows:
-            print("No table occurrences found." + (f" (filter: '{pattern}')" if pattern else ""))
-            return
-
-        print(f"\nTable Occurrences ({len(rows)}):")
-        for r in rows:
-            base = f" -> {r['base_table_name']}" if r['base_table_name'] != r['name'] else ""
-            print(f"  [{r['to_id']:4d}] {r['name']}{base}")
-    except Exception:
-        print("Table occurrences not indexed. Re-index with updated parser.")
-
-
-def cmd_table_occurrence(conn, name):
-    """Show details for a specific table occurrence."""
-    c = conn.cursor()
-    try:
-        c.execute("SELECT * FROM table_occurrences WHERE name LIKE ? OR to_id=?",
-                  (f'%{name}%', int(name) if name.isdigit() else -1))
-        to = c.fetchone()
-        if not to:
-            print(f"Table occurrence '{name}' not found.")
-            return
-
-        print(f"\nTable Occurrence: {to['name']}")
-        print(f"  ID:         {to['to_id']}")
-        print(f"  Base Table: {to['base_table_name']} (id={to['base_table_id']})")
-        print(f"  UUID:       {to['uuid']}")
-
-        # Show relationships involving this TO
-        c.execute("""SELECT * FROM relationships
-                     WHERE left_table=? OR right_table=?""",
-                  (to['name'], to['name']))
-        rels = c.fetchall()
-        if rels:
-            print(f"\n  Relationships ({len(rels)}):")
-            for r in rels:
-                direction = "->" if r['left_table'] == to['name'] else "<-"
-                other = r['right_table'] if r['left_table'] == to['name'] else r['left_table']
-                print(f"    {direction} {other}  ({r['left_field']} = {r['right_field']})")
-
-        # Show scripts that reference fields from this TO
-        c.execute("""SELECT DISTINCT source_name FROM field_references
-                     WHERE table_occurrence=?""", (to['name'],))
-        scripts = c.fetchall()
-        if scripts:
-            print(f"\n  Referenced by scripts ({len(scripts)}):")
-            for s in scripts[:15]:
-                print(f"    {s['source_name']}")
-            if len(scripts) > 15:
-                print(f"    ... and {len(scripts) - 15} more")
-    except Exception as e:
-        print(f"Error querying table occurrence: {e}")
-
-
 def cmd_custom_functions(conn, pattern=None):
     """List custom functions, optionally filtered by name pattern."""
     c = conn.cursor()
@@ -619,14 +553,21 @@ def cmd_custom_function(conn, name):
 
 def cmd_script_cfs(conn, name):
     """Show which custom functions a script uses."""
-    script = find_script(conn, name)
+    c = conn.cursor()
+    # Resolve script
+    try:
+        sid = int(name)
+        c.execute("SELECT script_id, name FROM scripts WHERE script_id=?", (sid,))
+    except ValueError:
+        c.execute("SELECT script_id, name FROM scripts WHERE name LIKE ?", (f'%{name}%',))
+    script = c.fetchone()
     if not script:
+        print(f"Script '{name}' not found.")
         return
 
     print(f"\nCustom functions used by: {script['name']} (ID: {script['script_id']})")
     print(f"{'='*70}")
 
-    c = conn.cursor()
     c.execute("""SELECT cf_name, step_index FROM cf_references
                  WHERE script_id=? ORDER BY step_index""", (script['script_id'],))
     refs = c.fetchall()
@@ -747,7 +688,6 @@ def cmd_summary(conn):
         ('script_steps', 'Script Steps'),
         ('layouts', 'Layouts'),
         ('relationships', 'Relationships'),
-        ('table_occurrences', 'Table Occurrences'),
         ('value_lists', 'Value Lists'),
         ('script_references', 'Cross-references'),
         ('external_data_sources', 'External Data Sources'),
@@ -820,13 +760,9 @@ def main():
             cmd_relationships(conn, ' '.join(args) if args else None)
         elif command == 'value-lists':
             cmd_value_lists(conn)
-        elif command == 'tos':
-            cmd_table_occurrences(conn, ' '.join(args) if args else None)
-        elif command == 'to':
-            cmd_table_occurrence(conn, ' '.join(args) if args else '')
-        elif command in ('custom-functions', 'cfs'):
+        elif command == 'custom-functions':
             cmd_custom_functions(conn, ' '.join(args) if args else None)
-        elif command in ('custom-function', 'cf'):
+        elif command == 'custom-function':
             cmd_custom_function(conn, ' '.join(args) if args else '')
         elif command == 'script-cfs':
             cmd_script_cfs(conn, ' '.join(args) if args else '')

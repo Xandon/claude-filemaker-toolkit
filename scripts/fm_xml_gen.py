@@ -227,6 +227,33 @@ def generate_step_xml(step_type, **kwargs):
         'perform_find': lambda: '<Step index="0" id="28" name="Perform Find" enable="True"></Step>',
         'show_all': lambda: '<Step index="0" id="23" name="Show All Records" enable="True"></Step>',
 
+        # Show Custom Dialog (step id 87). Aliases: 'show_dialog' and 'show_custom_dialog'.
+        # title/message are calculation expressions — quote string literals yourself
+        # (e.g. '"Navigation Error"'). Defaults to a single OK button.
+        'show_dialog': lambda title='', message='', button_ok='OK', button_cancel='':
+            (f'''<Step index="0" id="87" name="Show Custom Dialog" enable="True">
+  <ParameterValues membercount="{3 if not button_cancel else 4}">
+    <Parameter type="Title">
+      <Calculation datatype="1" position="0">
+        <Calculation><Text><![CDATA[{title}]]></Text></Calculation>
+      </Calculation>
+    </Parameter>
+    <Parameter type="Message">
+      <Calculation datatype="1" position="1">
+        <Calculation><Text><![CDATA[{message}]]></Text></Calculation>
+      </Calculation>
+    </Parameter>
+    <Parameter type="Button1" value="{_escape(button_ok)}">
+      <Boolean type="Commit" value="True" />
+    </Parameter>'''
+            + (f'''
+    <Parameter type="Button2" value="{_escape(button_cancel)}">
+      <Boolean type="Commit" value="False" />
+    </Parameter>''' if button_cancel else '')
+            + '''
+  </ParameterValues>
+</Step>'''),
+
         'exit_script': lambda result='': f'''<Step index="0" id="103" name="Exit Script" enable="True">
   <ParameterValues membercount="1">
     <Parameter type="Calculation">
@@ -260,326 +287,15 @@ def generate_step_xml(step_type, **kwargs):
     </Parameter>
   </ParameterValues>
 </Step>''',
-
-        'delete_record': lambda warn='True': f'''<Step index="0" id="9" name="Delete Record/Request" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="Boolean">
-      <Boolean type="WarnAboutDeletion" id="16777216" value="{warn}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'duplicate_record': lambda: '<Step index="0" id="8" name="Duplicate Record/Request" enable="True"></Step>',
-
-        'go_to_field': lambda table, field, table_id='0', field_id='0': f'''<Step index="0" id="17" name="Go to Field" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="Boolean">
-      <Boolean type="SelectText" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="FieldReference">
-      <FieldReference id="{field_id}" name="{_escape(field)}">
-        <repetition>
-          <Calculation datatype="1" position="10"><Calculation><Text>1</Text></Calculation></Calculation>
-        </repetition>
-        <TableOccurrenceReference id="{table_id}" name="{_escape(table)}" />
-      </FieldReference>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'insert_text': lambda text: f'''<Step index="0" id="61" name="Insert Text" enable="True">
-  <ParameterValues membercount="3">
-    <Parameter type="Boolean">
-      <Boolean type="SelectText" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{text}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'set_field_by_name': lambda field_name, value: f'''<Step index="0" id="147" name="Set Field by Name" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{field_name}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{value}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'go_to_related_record': lambda table, layout, table_id='0', layout_id='0': f'''<Step index="0" id="74" name="Go to Related Record" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="Related">
-      <TableOccurrenceReference id="{table_id}" name="{_escape(table)}" />
-      <LayoutReferenceContainer value="1">
-        <LayoutReference id="{layout_id}" name="{_escape(layout)}" />
-      </LayoutReferenceContainer>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'sort_records': lambda sort_field='', ascending='True': f'''<Step index="0" id="39" name="Sort Records" enable="True">
-  <ParameterValues membercount="3">
-    <Parameter type="Boolean">
-      <Boolean type="RestoreSortOrder" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="SortSpecification">
-      <SortField field="{_escape(sort_field)}" order="{ascending}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'omit_record': lambda: '<Step index="0" id="25" name="Omit Record" enable="True"></Step>',
-
-        'show_custom_dialog': lambda title='', message='', button1='OK': f'''<Step index="0" id="87" name="Show Custom Dialog" enable="True">
-  <ParameterValues membercount="7">
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{title}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{message}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{button1}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'close_window': lambda window_id='0': f'''<Step index="0" id="121" name="Close Window" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="WindowReference">
-      <WindowReference id="{window_id}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'new_window': lambda name='', style='0': f'''<Step index="0" id="122" name="New Window" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="WindowReference">
-      <WindowReference name="{_escape(name)}" style="{style}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'install_on_timer': lambda script_name, interval='1', script_id='0': f'''<Step index="0" id="164" name="Install OnTimer Script" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="List">
-      <List name="From list" value="0">
-        <ScriptReference id="{script_id}" name="{_escape(script_name)}" />
-      </List>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="2" position="0">
-        <Calculation><Text>{interval}</Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'go_to_object': lambda object_name: f'''<Step index="0" id="145" name="Go to Object" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="Object">
-      <ObjectReference name="{_escape(object_name)}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'refresh_object': lambda object_name: f'''<Step index="0" id="167" name="Refresh Object" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="Object">
-      <ObjectReference name="{_escape(object_name)}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'open_url': lambda url: f'''<Step index="0" id="111" name="Open URL" enable="True">
-  <ParameterValues membercount="3">
-    <Parameter type="Boolean">
-      <Boolean type="Automatic" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Boolean">
-      <Boolean type="EscapeURL" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{url}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'send_mail': lambda to='', subject='', body='': f'''<Step index="0" id="63" name="Send Mail" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="Email">
-      <MailParam name="to" value="{_escape(to)}" />
-      <MailParam name="cc" value="" />
-      <MailParam name="bcc" value="" />
-      <MailParam name="subject" value="{_escape(subject)}" />
-      <MailParam name="message" value="{_escape(body)}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'import_records': lambda source_file='': f'''<Step index="0" id="35" name="Import Records" enable="True">
-  <ParameterValues membercount="4">
-    <Parameter type="Boolean">
-      <Boolean type="ShowDialog" id="16777216" value="True" />
-    </Parameter>
-    <Parameter type="Boolean">
-      <Boolean type="NoDialogOnMatch" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="DataSourceReference">
-      <DataSourceReference filePath="{_escape(source_file)}" />
-    </Parameter>
-    <Parameter type="ImportField">
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'export_records': lambda target_file='': f'''<Step index="0" id="36" name="Export Records" enable="True">
-  <ParameterValues membercount="3">
-    <Parameter type="Boolean">
-      <Boolean type="ShowDialog" id="16777216" value="True" />
-    </Parameter>
-    <Parameter type="Boolean">
-      <Boolean type="SaveAsDialog" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Export">
-      <ExportField />
-      <FilePath filePath="{_escape(target_file)}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'replace_field_contents': lambda table, field, table_id='0', field_id='0', replace_expr='': f'''<Step index="0" id="91" name="Replace Field Contents" enable="True">
-  <ParameterValues membercount="3">
-    <Parameter type="Boolean">
-      <Boolean type="SelectText" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="FieldReference">
-      <FieldReference id="{field_id}" name="{_escape(field)}">
-        <repetition>
-          <Calculation datatype="1" position="10"><Calculation><Text>1</Text></Calculation></Calculation>
-        </repetition>
-        <TableOccurrenceReference id="{table_id}" name="{_escape(table)}" />
-      </FieldReference>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{replace_expr}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'go_to_portal_row': lambda target='First': f'''<Step index="0" id="99" name="Go to Portal Row" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="Boolean">
-      <Boolean type="SelectText" id="16777216" value="False" />
-    </Parameter>
-    <Parameter type="Portal">
-      <Portal name="{target}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'insert_calculated_result': lambda target_field, calculation, target_field_id='0', table='': f'''<Step index="0" id="95" name="Insert Calculated Result" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="FieldReference">
-      <FieldReference id="{target_field_id}" name="{_escape(target_field)}">
-        <repetition>
-          <Calculation datatype="1" position="10"><Calculation><Text>1</Text></Calculation></Calculation>
-        </repetition>
-        <TableOccurrenceReference id="0" name="{_escape(table)}" />
-      </FieldReference>
-    </Parameter>
-    <Parameter type="Calculation">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{calculation}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'constrain_found_set': lambda: '<Step index="0" id="126" name="Constrain Found Set" enable="True"></Step>',
-
-        'extend_found_set': lambda: '<Step index="0" id="127" name="Extend Found Set" enable="True"></Step>',
-
-        'select_window': lambda window_id='0': f'''<Step index="0" id="123" name="Select Window" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="WindowReference">
-      <WindowReference id="{window_id}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'perform_script_on_server': lambda script_name, script_id='0', param='': f'''<Step index="0" id="175" name="Perform Script on Server" enable="True">
-  <ParameterValues membercount="2">
-    <Parameter type="List">
-      <List name="From list" value="0">
-        <ScriptReference id="{script_id}" name="{_escape(script_name)}" />
-      </List>
-    </Parameter>
-    <Parameter type="Parameter">
-      <Calculation datatype="1" position="0">
-        <Calculation><Text><![CDATA[{param}]]></Text></Calculation>
-      </Calculation>
-    </Parameter>
-  </ParameterValues>
-</Step>''',
-
-        'truncate_table': lambda table='', table_id='0': f'''<Step index="0" id="166" name="Truncate Table" enable="True">
-  <ParameterValues membercount="1">
-    <Parameter type="TableOccurrenceReference">
-      <TableOccurrenceReference id="{table_id}" name="{_escape(table)}" />
-    </Parameter>
-  </ParameterValues>
-</Step>''',
     }
+
+    # Aliases for convenience
+    aliases = {
+        'show_custom_dialog': 'show_dialog',
+        'show_all_records': 'show_all',
+        'commit_records': 'commit',
+    }
+    step_type = aliases.get(step_type, step_type)
 
     if step_type not in step_templates:
         raise ValueError(f"Unknown step type: {step_type}. Available: {', '.join(step_templates.keys())}")

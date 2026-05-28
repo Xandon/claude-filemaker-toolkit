@@ -12,10 +12,6 @@ Usage:
     python fm_manage.py query <solution> <command>    # Query a solution's database
     python fm_manage.py review <solution> <json>      # Generate a code review HTML
     python fm_manage.py extract <solution> <script>   # Extract script XML for MBS
-    python fm_manage.py diagnose <solution> <cmd>     # Run diagnostics (health, hotspots, complexity, etc.)
-    python fm_manage.py graph <solution>              # Generate relationship graph HTML
-    python fm_manage.py diff <solution> <old.db> <cmd> # Compare two DB versions
-    python fm_manage.py bulk-review <solution>        # Auto-generate review from diagnostics
     python fm_manage.py summary <solution>            # Quick summary of a solution
 
 Directory structure:
@@ -51,42 +47,9 @@ from datetime import datetime
 #   SOLUTIONS_DIR — <project>/solutions  (per-project, matches current layout)
 #   TOOLKIT_DIR  — where the other fm_*.py scripts live (same as SCRIPT_DIR in plugin)
 SCRIPT_DIR = Path(__file__).resolve().parent
-TOOLKIT_DIR = SCRIPT_DIR
-
-
-def _resolve_project_dir():
-    """Resolve the project directory with multiple fallback strategies.
-
-    Priority:
-      1. --project-dir CLI argument (handled in main(), sets FM_PROJECT_DIR)
-      2. FM_PROJECT_DIR environment variable
-      3. Walk upward from cwd looking for a solutions/ directory
-      4. Walk upward from cwd looking for a .fm_project marker file
-      5. Fall back to cwd
-    """
-    # Check env var first
-    env_dir = os.environ.get("FM_PROJECT_DIR")
-    if env_dir:
-        return Path(env_dir).resolve()
-
-    # Walk upward looking for solutions/ or .fm_project
-    cwd = Path.cwd().resolve()
-    check = cwd
-    for _ in range(10):  # max 10 levels up
-        if (check / "solutions").is_dir():
-            return check
-        if (check / ".fm_project").exists():
-            return check
-        parent = check.parent
-        if parent == check:
-            break
-        check = parent
-
-    return cwd
-
-
-PROJECT_DIR = _resolve_project_dir()
+PROJECT_DIR = Path(os.environ.get("FM_PROJECT_DIR", Path.cwd())).resolve()
 SOLUTIONS_DIR = PROJECT_DIR / "solutions"
+TOOLKIT_DIR = SCRIPT_DIR
 
 # SQLite DB cache: mounted Cowork filesystems don't always support SQLite locking,
 # so we fall back to a writable cache. Order of preference:
@@ -144,8 +107,6 @@ FM_QUERY = TOOLKIT_DIR / "fm_query.py"
 FM_XML_GEN = TOOLKIT_DIR / "fm_xml_gen.py"
 FM_REVIEW_GEN = TOOLKIT_DIR / "fm_review_gen.py"
 FM_DIAGNOSTICS = TOOLKIT_DIR / "fm_diagnostics.py"
-FM_DIFF = TOOLKIT_DIR / "fm_diff.py"
-FM_GRAPH = TOOLKIT_DIR / "fm_graph.py"
 
 
 def get_solutions():
@@ -299,48 +260,24 @@ def cmd_index(args):
         print(result.stderr)
         sys.exit(1)
 
-    # Verify the cache copy is valid before doing anything else
-    if not temp_db.exists() or temp_db.stat().st_size == 0:
-        print(f"ERROR: Indexer did not produce a valid database at {temp_db}")
-        sys.exit(1)
-
-    try:
-        conn = sqlite3.connect(str(temp_db))
-        conn.execute("SELECT COUNT(*) FROM scripts")
-        conn.close()
-    except Exception as e:
-        print(f"ERROR: Cache database not readable: {e}")
-        sys.exit(1)
-
-    # Try to copy to the solution directory as a convenience;
-    # keep the cache copy as the PRIMARY (it's on a writable FS).
+    # Try to copy to the solution directory; if that fails, keep in cache
     target_db = sol_dir / db_name
-    sol_dir_works = False
+    db_location = temp_db  # default to cache
     try:
         shutil.copy2(str(temp_db), str(target_db))
         # Verify the copy is readable by SQLite
         conn = sqlite3.connect(str(target_db))
         conn.execute("SELECT COUNT(*) FROM scripts")
         conn.close()
-        sol_dir_works = True
+        # Success — the solution dir copy works
+        db_location = target_db
+        temp_db.unlink()
     except Exception:
-        pass
+        # Keep DB in cache — it's still fully functional there
+        db_location = temp_db
+        print(f"  (DB stored in cache: {temp_db} — mount FS doesn't support SQLite)")
 
-    # Report locations — never delete the cache copy
-    if sol_dir_works:
-        print(f"Database saved to: {target_db}")
-        print(f"Database cached at: {temp_db}")
-    else:
-        print(f"Database saved to: {temp_db}")
-        print(f"  (solution dir copy skipped — mount FS doesn't support SQLite)")
-
-    # Write a .fm_project marker so future queries can find this project
-    marker = PROJECT_DIR / ".fm_project"
-    if not marker.exists():
-        try:
-            marker.write_text(f"# FileMaker Toolkit project marker\n# Created: {datetime.now().isoformat()}\n")
-        except Exception:
-            pass
+    print(f"Database saved to: {db_location}")
 
     print(f"\nSolution '{sol_name}' is ready. Query it with:")
     print(f"  python {sys.argv[0]} query {sol_name} summary")
@@ -385,7 +322,7 @@ def cmd_review(args):
         stem = review_path.stem
         output_path = sol_data["dir"] / "output" / f"{stem}.html"
 
-    cmd = [sys.executable, str(FM_REVIEW_GEN), "review", str(sol_data["db"]),
+    cmd = [sys.executable, str(FM_REVIEW_GEN), str(sol_data["db"]),
            str(review_path), "--output", str(output_path)]
     if args.template:
         cmd.extend(["--template", args.template])
@@ -432,6 +369,56 @@ def cmd_diagnose(args):
     sys.exit(result.returncode)
 
 
+def cmd_paste_html(args):
+    """Build an HTML page of paste-ready FileMaker scripts (extract + author)."""
+    sol_name, sol_data = resolve_solution(args.solution)
+    if sol_data.get("db") is None:
+        print(f"Solution '{sol_name}' is not indexed yet.")
+        sys.exit(1)
+
+    items = []
+    for s in args.script or []:
+        items.append(("extract", s))
+    for s in args.spec or []:
+        items.append(("spec", s))
+    if not items:
+        print("Provide at least one --script or --spec.")
+        sys.exit(2)
+
+    out = args.output
+    if not out:
+        out_dir = sol_data["dir"] / "output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = str(out_dir / "scripts.html")
+
+    # Import the generator (alongside this script in scripts/)
+    sys.path.insert(0, str(SCRIPT_DIR))
+    try:
+        from fm_paste_html_gen import generate_paste_html, ResolveError, SpecError
+    except ImportError as e:
+        print(f"Could not import fm_paste_html_gen: {e}")
+        sys.exit(1)
+
+    try:
+        result_path = generate_paste_html(
+            db_path=str(sol_data["db"]),
+            items=items,
+            output_path=out,
+            title=args.title,
+            include_human=not args.no_human,
+            extra_pills=[f"Solution: {sol_name}"],
+        )
+    except (ResolveError, SpecError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(2)
+
+    n_extract = sum(1 for k, _ in items if k == "extract")
+    n_spec = sum(1 for k, _ in items if k == "spec")
+    print(f"Wrote: {result_path}")
+    print(f"  Extracted scripts: {n_extract}")
+    print(f"  Spec files:        {n_spec}")
+
+
 def cmd_summary(args):
     """Show a detailed summary of a solution."""
     sol_name, sol_data = resolve_solution(args.solution)
@@ -470,90 +457,11 @@ def cmd_summary(args):
     sys.exit(result.returncode)
 
 
-def cmd_graph(args):
-    """Generate an interactive relationship graph HTML."""
-    sol_name, sol_data = resolve_solution(args.solution)
-    if sol_data.get("db") is None:
-        print(f"Solution '{sol_name}' is not indexed yet.")
-        sys.exit(1)
-
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = sol_data["dir"] / "output" / f"{sol_name}_graph.html"
-
-    cmd = [sys.executable, str(FM_GRAPH), str(sol_data["db"]),
-           "--output", str(output_path)]
-    if args.focus:
-        cmd.extend(["--focus", args.focus])
-    if args.depth:
-        cmd.extend(["--depth", str(args.depth)])
-
-    print(f"Generating relationship graph → {output_path}")
-    result = subprocess.run(cmd, capture_output=False)
-    if result.returncode == 0:
-        print(f"\nGraph saved to: {output_path}")
-    sys.exit(result.returncode)
-
-
-def cmd_diff(args):
-    """Compare two versions of a solution using fm_diff."""
-    sol_name, sol_data = resolve_solution(args.solution)
-    if sol_data.get("db") is None:
-        print(f"Solution '{sol_name}' is not indexed yet.")
-        sys.exit(1)
-
-    old_db = Path(args.old_db)
-    if not old_db.exists():
-        # Try in the DB cache
-        cached = DB_CACHE_DIR / args.old_db
-        if cached.exists():
-            old_db = cached
-        else:
-            print(f"Old database not found: {args.old_db}")
-            sys.exit(1)
-
-    cmd = [sys.executable, str(FM_DIFF), str(old_db), str(sol_data["db"]),
-           args.diff_command] + args.extra
-    result = subprocess.run(cmd, capture_output=False)
-    sys.exit(result.returncode)
-
-
-def cmd_bulk_review(args):
-    """Generate a bulk code review using auto-detection."""
-    sol_name, sol_data = resolve_solution(args.solution)
-    if sol_data.get("db") is None:
-        print(f"Solution '{sol_name}' is not indexed yet.")
-        sys.exit(1)
-
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = sol_data["dir"] / "output" / f"{sol_name}_bulk_review.html"
-
-    cmd = [sys.executable, str(FM_REVIEW_GEN), "bulk", str(sol_data["db"]),
-           "--output", str(output_path)]
-    if args.filter:
-        cmd.extend(["--filter", args.filter])
-    if args.min_steps:
-        cmd.extend(["--min-steps", str(args.min_steps)])
-    if args.checks:
-        cmd.extend(["--checks", args.checks])
-
-    print(f"Generating bulk review → {output_path}")
-    result = subprocess.run(cmd, capture_output=False)
-    if result.returncode == 0:
-        print(f"\nBulk review saved to: {output_path}")
-    sys.exit(result.returncode)
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="FileMaker Solution Manager — manage multiple DDR XML solutions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-  Global options:
-    --project-dir PATH   Set the project directory (default: auto-detect)
 Examples:
   python fm_manage.py list
   python fm_manage.py index NewSolution.xml
@@ -571,15 +479,11 @@ Examples:
   python fm_manage.py diagnose HaverSS impact "Shopify_Orders"
   python fm_manage.py diagnose HaverSS orphans
   python fm_manage.py diagnose HaverSS anti-patterns
-  python fm_manage.py diagnose HaverSS complexity "Script Name"
-  python fm_manage.py diagnose HaverSS complexity-report
-  python fm_manage.py diagnose HaverSS complexity-html --output complexity.html
-  python fm_manage.py graph ILCrop --focus "Samples"
-  python fm_manage.py diff ILCrop old_ILCrop.db diff-summary
-  python fm_manage.py bulk-review ILCrop --min-steps 20 --checks no-error-handling,slow-patterns
+  python fm_manage.py paste-html LAYER --script "Close Card Window" -o out.html
+  python fm_manage.py paste-html LAYER --spec picker_spec.json -o picker.html
+  python fm_manage.py paste-html LAYER --script 974 --spec patches.json
         """
     )
-    parser.add_argument("--project-dir", help="Project directory containing solutions/ (default: auto-detect)")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # list
@@ -623,37 +527,25 @@ Examples:
     sub_diag = subparsers.add_parser("diagnose", aliases=["diag", "dx"],
                                       help="Run diagnostic analysis (health, hotspots, slow-patterns, etc.)")
     sub_diag.add_argument("solution", help="Solution name (partial match OK)")
-    sub_diag.add_argument("diag_command", help="Diagnostic command: health, hotspots, trace, slow-patterns, impact, orphans, duplicates, no-error-handling, dead-code, anti-patterns, complexity, complexity-report, complexity-html")
+    sub_diag.add_argument("diag_command", help="Diagnostic command: health, hotspots, trace, slow-patterns, impact, orphans, duplicates, no-error-handling, dead-code, anti-patterns")
     sub_diag.add_argument("extra", nargs="*", help="Additional arguments")
     sub_diag.set_defaults(func=cmd_diagnose)
 
-    # graph
-    sub_graph = subparsers.add_parser("graph",
-                                       help="Generate interactive relationship graph HTML")
-    sub_graph.add_argument("solution", help="Solution name")
-    sub_graph.add_argument("--output", "-o", help="Output HTML path")
-    sub_graph.add_argument("--focus", "-f", help="Center on a specific table occurrence")
-    sub_graph.add_argument("--depth", "-d", type=int, help="Hops from focus TO (default: all)")
-    sub_graph.set_defaults(func=cmd_graph)
-
-    # diff
-    sub_diff = subparsers.add_parser("diff",
-                                      help="Compare two versions of a solution")
-    sub_diff.add_argument("solution", help="Solution name (current/new version)")
-    sub_diff.add_argument("old_db", help="Path to old version's .db file")
-    sub_diff.add_argument("diff_command", help="diff-summary, diff-scripts, diff-script, diff-fields, diff-html")
-    sub_diff.add_argument("extra", nargs="*", help="Additional arguments (e.g., script name)")
-    sub_diff.set_defaults(func=cmd_diff)
-
-    # bulk-review
-    sub_bulk = subparsers.add_parser("bulk-review", aliases=["bulk"],
-                                      help="Auto-generate code review from diagnostics")
-    sub_bulk.add_argument("solution", help="Solution name")
-    sub_bulk.add_argument("--output", "-o", help="Output HTML path")
-    sub_bulk.add_argument("--filter", "-f", help="Script folder path pattern (e.g., 'Admin/*')")
-    sub_bulk.add_argument("--min-steps", type=int, help="Minimum step count threshold")
-    sub_bulk.add_argument("--checks", "-c", help="Comma-separated checks: no-error-handling,slow-patterns,dead-code")
-    sub_bulk.set_defaults(func=cmd_bulk_review)
+    # paste-html
+    sub_paste = subparsers.add_parser(
+        "paste-html", aliases=["paste"],
+        help="Build a paste-ready HTML page of scripts (Copy-XML buttons)")
+    sub_paste.add_argument("solution", help="Solution name (partial match OK)")
+    sub_paste.add_argument("--script", action="append", default=[],
+                           help="Existing script name or id to extract (repeatable)")
+    sub_paste.add_argument("--spec", action="append", default=[],
+                           help="Spec JSON describing new scripts (repeatable)")
+    sub_paste.add_argument("--title", help="Page title")
+    sub_paste.add_argument("--no-human", action="store_true",
+                           help="Suppress the pseudocode panel (XML only)")
+    sub_paste.add_argument("-o", "--output",
+                           help="Output HTML path (default: solutions/<solution>/output/scripts.html)")
+    sub_paste.set_defaults(func=cmd_paste_html)
 
     # summary
     sub_summary = subparsers.add_parser("summary", aliases=["info"],
@@ -662,23 +554,6 @@ Examples:
     sub_summary.set_defaults(func=cmd_summary)
 
     args = parser.parse_args()
-
-    # Apply --project-dir override before any command runs
-    if args.project_dir:
-        global PROJECT_DIR, SOLUTIONS_DIR, DB_CACHE_DIR
-        PROJECT_DIR = Path(args.project_dir).resolve()
-        SOLUTIONS_DIR = PROJECT_DIR / "solutions"
-        # Re-evaluate DB cache for new project dir
-        _local_cache = PROJECT_DIR / ".fm_db_cache"
-        try:
-            _local_cache.mkdir(parents=True, exist_ok=True)
-            _probe = _local_cache / ".probe"
-            _probe.touch()
-            _probe.unlink()
-            DB_CACHE_DIR = _local_cache
-        except Exception:
-            pass  # keep existing DB_CACHE_DIR
-
     if not args.command:
         parser.print_help()
         sys.exit(1)

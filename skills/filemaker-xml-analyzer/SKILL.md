@@ -67,19 +67,8 @@ python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py review <solution> <review.json
 # Extract a script as MBS-compatible clipboard XML
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py extract <solution> <script_name_or_id>
 
-# Diagnostic commands (hotspots, impact, slow-patterns, health, complexity, etc.)
+# Diagnostic commands (hotspots, impact, slow-patterns, health, etc.)
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diagnose <solution> <command>
-
-# Generate interactive relationship graph
-python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py graph <solution> [--focus "TO Name"] [--depth 2]
-
-# Compare two versions of a solution (diff)
-python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diff <solution> <old.db> diff-summary
-python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diff <solution> <old.db> diff-script "Script Name"
-python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diff <solution> <old.db> diff-html --output changes.html
-
-# Auto-generate bulk code review from diagnostics
-python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py bulk-review <solution> --min-steps 20 --checks no-error-handling,slow-patterns
 ```
 
 The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query`, and `/fm-review`.
@@ -116,8 +105,6 @@ The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query
 | `value-lists` | List all value lists |
 | `layouts [pattern]` | List layouts with their table occurrences |
 | `layout <name\|id>` | Show layout details: script triggers, fields |
-| `tos [pattern]` | List table occurrences with base table mapping (FM 22+) |
-| `to <name>` | Show TO details, relationships, and scripts referencing its fields (FM 22+) |
 
 ### Cross-References & Search
 | Command | Description |
@@ -138,33 +125,6 @@ The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query
 | `no-error-handling` | Scripts missing error checks after risky operations |
 | `dead-code` | Scripts with significant disabled steps |
 | `anti-patterns` | Combined performance + quality scan |
-| `complexity <name\|id>` | Deep complexity analysis of a single script (cyclomatic, nesting, risk) |
-| `complexity-report [n]` | Ranked complexity report for all scripts with A–F grades |
-| `complexity-html --output file` | Generate interactive HTML complexity dashboard |
-
-### Diff (Version Comparison)
-| Command | Description |
-|---------|-------------|
-| `diff <solution> <old.db> diff-summary` | High-level change summary between two DB versions |
-| `diff <solution> <old.db> diff-scripts` | Detailed script changes using step hash comparison |
-| `diff <solution> <old.db> diff-script <name>` | Side-by-side diff of a specific script |
-| `diff <solution> <old.db> diff-fields` | Field-level changes by table |
-| `diff <solution> <old.db> diff-html` | Self-contained HTML diff report |
-
-### Relationship Graph
-| Command | Description |
-|---------|-------------|
-| `graph <solution>` | Generate interactive HTML relationship graph |
-| `graph <solution> --focus "TO"` | Center on a specific table occurrence |
-| `graph <solution> --focus "TO" --depth 2` | Show only TOs within N hops |
-
-### Bulk Code Review
-| Command | Description |
-|---------|-------------|
-| `bulk-review <solution>` | Auto-generate review from diagnostic checks |
-| `bulk-review <solution> --filter "Admin/*"` | Filter scripts by folder path pattern |
-| `bulk-review <solution> --min-steps 20` | Only review scripts with 20+ steps |
-| `bulk-review <solution> --checks no-error-handling,slow-patterns,dead-code` | Choose which checks to run |
 
 ## How to Review a Script
 
@@ -207,7 +167,13 @@ The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query
        "fix": {
          "516": {
            "before_human": "Original code",
-           "after_human": "Fixed code"
+           "after_human": "Fixed code",
+           "after_steps": [
+             { "type": "set_error_capture", "on": "True" },
+             { "type": "if", "condition": "$count = 0" },
+             { "type": "exit_script" },
+             { "type": "end_if" }
+           ]
          }
        }
      }]
@@ -219,7 +185,51 @@ The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query
    python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py review <solution> <review.json>
    ```
 
-The output HTML is self-contained (no external dependencies). It has an Overview tab, per-script tabs with syntax-highlighted steps, a findings panel with before/after diffs, custom function chips for framework references, and one-click XML copy for MBS paste-back. **FM 22+**: CF chips now show the full calculation body on click — expandable code panel with a "Copy Body" button.
+The output HTML is self-contained (no external dependencies). It has an Overview tab, per-script tabs with syntax-highlighted steps, a findings panel with before/after diffs, custom function chips for framework references, and one-click XML copy for paste-back.
+
+### Copy buttons in the review HTML
+
+The review HTML has **two** Copy buttons. Their visibility depends on the
+review JSON you author — get this right or the user sees no Copy buttons.
+
+**Per-script "Copy Script XML" + "Copy Pseudocode"** (top-right of every
+script's tab). Always renders when the script has been indexed — no extra
+JSON fields needed. These copy the full script's clipboard XML and its
+human-readable pseudocode, respectively. Tell the user the buttons are in
+the **info bar at the top of each script's tab** — clicking a row in the
+Overview tab navigates them in.
+
+**Per-finding Copy buttons** (inside the finding card's body). What renders
+depends on what your `fix` block carries — and the rule is intentionally
+forgiving so the user always has *something* to take away when an AFTER
+block is on screen:
+
+| `fix` contents | Buttons shown | Notes |
+| --- | --- | --- |
+| `fix_xml` only | **Copy Fix XML** | XML is paste-ready into Script Workspace |
+| `fix_step_indices` / `after_steps` | **Copy Fix XML** | Generator builds `fix_xml` for you |
+| `after_human` only | **Copy Fix (pseudocode)** + caveat note | User has to translate by hand |
+| `fix_xml` + `after_human` | **Copy Fix XML** + **Copy Pseudocode** | Both available |
+| Neither | (no buttons) | Card is informational only |
+
+When the fix is a real code change, prefer authoring it as one of:
+
+1. `"fix_xml": "<fmxmlsnippet>…</fmxmlsnippet>"` — pre-built clipboard
+   XML for the fix. Use this when you've hand-authored the exact paste
+   payload.
+2. `"fix_step_indices": [12, 13, 14]` — array of step indices from the
+   *existing* script that you want to extract and reorder. Use this when
+   the fix is "delete steps 16–19, keep 12–14 in their current form".
+3. `"after_steps": [ { "type": "set_error_capture", … }, … ]` — array of
+   new step definitions to generate from scratch via
+   `fm_xml_gen.generate_step_xml`. Use this when the fix introduces new
+   steps that aren't in the script today. **This is the best default for
+   new code.**
+
+If you only have time for `after_human` text, that's better than nothing
+— the user gets a Copy Pseudocode button with a note flagging that they'll
+need to translate manually. But the gold standard is one of the three
+fix-XML formats above so the user can one-click-paste the fix.
 
 ## Generating Modified Script XML
 
@@ -227,12 +237,56 @@ For MBS plugin paste-back:
 
 1. `python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py extract <solution> <script>` — extract the original
 2. Discuss changes with the user
-3. Edit the XML or build new steps with `fm_xml_gen.py generate_step_xml()` (supports 49+ step types including Set Field, Perform Script, Show Custom Dialog, Go to Related Record, Install OnTimer, New Window, Open URL, Import/Export Records, Replace Field Contents, Perform Script on Server, Truncate Table, and more)
+3. Edit the XML or build new steps with `fm_xml_gen.py generate_step_xml()` (supports 23+ step types)
 4. Wrap in FMObjectList format if building from scratch
+
+## Authoring & Delivering Scripts as a Paste-Ready HTML Page
+
+When you've designed FileMaker scripts during a session — or you want to
+re-deliver an existing one to the user as a copy-pasteable artefact —
+emit a self-contained HTML page where each script has a **Copy XML**
+button. Pasting in FileMaker 18+ Script Workspace materialises the steps
+directly; no MBS plugin needed. The driver is `/fm-paste-html` and the
+underlying generator lives at `scripts/fm_paste_html_gen.py`.
+
+### When to use it
+
+- You designed a new workflow and need to hand the user paste-ready scripts.
+- The user asked to copy an existing script out (extract mode).
+- You're delivering a mixed batch (some new, some existing).
+
+Do **not** dump raw `<fmxmlsnippet>` XML into chat — clipboard pasting from
+chat is unreliable and the user loses the pseudocode side panel.
+
+### Workflow
+
+1. **Index the solution** with `/fm-setup` if it isn't already.
+2. **Discover references** with `/fm-query` (`field`, `layout`, `table`,
+   `scripts`) so the spec uses names that actually exist.
+3. **Write a spec JSON** (author mode) — see `/fm-paste-html` for the
+   step-type table. Use `raw_xml` as an escape hatch for any step the
+   spec doesn't yet cover, and consider extending
+   `scripts/fm_step_builders.py` if you reach for it repeatedly.
+4. **Run** `python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py paste-html
+   <solution> --spec <file.json> --script "<name>" -o out.html`.
+5. **Present** the HTML with a `computer://` link.
+
+### Reference resolution
+
+The generator looks every name up against the indexed DDR:
+
+- `layout` → `layouts.name` (case-insensitive)
+- `script` → `scripts.name`
+- `table` + `field` → `fields.table_name` + `fields.name`; if `table`
+  is a TO name, it follows `relationships` back to the base table.
+
+Any miss fails loudly with a "did you mean…" list of nearby names — fix
+the spec before regenerating. FileMaker pastes that fall back to
+name-only matching are silently lossy.
 
 ## FileMaker XML Structure Reference
 
-### FM 21 and earlier (FMSaveAsXML v2.2.2.0)
+The DDR XML has this high-level structure:
 
 ```
 FMSaveAsXML
@@ -244,33 +298,6 @@ FMSaveAsXML
         ├── StepsForScripts (actual script step logic)
         └── CustomFunctionsCatalog (or CustomFunctionCatalog)
 ```
-
-### FM 22+ (FMSaveAsXML v2.2.3.0)
-
-FM 22 introduces a two-part AddAction/ModifyAction architecture and several new sections:
-
-```
-FMSaveAsXML
-└── Structure
-    ├── AddAction
-    │   ├── FieldsForTables (table + field definitions — base records)
-    │   ├── ScriptCatalog (script metadata)
-    │   ├── LayoutCatalog (layout objects — base records)
-    │   ├── CalcsForCustomFunctions (NEW — CF calculation bodies in CDATA)
-    │   ├── TableOccurrenceCatalog (NEW — full TO graph with base table refs)
-    │   ├── StepsForScripts (script step logic — now includes hash attributes)
-    │   └── CustomFunctionsCatalog
-    └── ModifyAction (NEW — field calc formulas, layout modifications)
-        ├── FieldsForTables (field calculation formulas not in AddAction)
-        └── LayoutCatalog (layout modifications)
-```
-
-Key FM 22 changes the parser handles:
-- **CalcsForCustomFunctions**: CF calculation bodies are now included in the DDR export (previously unavailable). The parser extracts these and stores them as `calculation_text` on the `custom_functions` table.
-- **ModifyAction**: Contains field calculation formulas (auto-enter calcs, validations) and layout modifications that are separate from the base definitions in AddAction. The parser merges these back into the `fields` table.
-- **TableOccurrenceCatalog**: Full table occurrence graph with base table references, UUIDs, and view settings. Indexed into the `table_occurrences` table.
-- **Step hash attributes**: Each script step now carries a `hash` attribute for change detection. Stored in `script_steps.step_hash`.
-- **Idempotent re-indexing**: Running the indexer again on the same file safely replaces the old data rather than duplicating it.
 
 For detailed XML element reference, read the files in `${CLAUDE_PLUGIN_ROOT}/skills/filemaker-xml-analyzer/references/`:
 - `fm_step_reference.md` — All 72 script step types with XML examples
@@ -285,5 +312,4 @@ For detailed XML element reference, read the files in `${CLAUDE_PLUGIN_ROOT}/ski
 - SQLite databases are typically <5MB even for 100MB+ XML files
 - Script name matching is case-insensitive with partial-match support
 - CF indexing uses regex word-boundary matching against step XML; expect ~2,500+ cross-references in a large solution
-- **FM 22+**: Custom function calculation bodies are now included in the DDR export and automatically parsed. Use `custom-function <name>` to see the full CF body. For FM 21 and earlier, CF bodies are not available in the DDR — only signatures and parameter names.
-- Re-indexing is idempotent: running the indexer on a previously indexed file replaces old data cleanly
+- Note: FileMaker DDR XML does NOT include custom function calculation bodies — only signatures and parameter names. Use MBS plugin or manual entry if you need the body.
