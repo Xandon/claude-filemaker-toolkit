@@ -370,7 +370,12 @@ def cmd_diagnose(args):
 
 
 def cmd_paste_html(args):
-    """Build an HTML page of paste-ready FileMaker scripts (extract + author)."""
+    """Build a paste-ready implementation package (extract + author).
+
+    Subcommand: ``implement`` (aliases: ``paste-html``, ``paste``). Produces
+    a self-contained HTML page bundling Copy-XML buttons for scripts and
+    (when extended) ordered manual steps for layout / schema changes.
+    """
     sol_name, sol_data = resolve_solution(args.solution)
     if sol_data.get("db") is None:
         print(f"Solution '{sol_name}' is not indexed yet.")
@@ -389,7 +394,7 @@ def cmd_paste_html(args):
     if not out:
         out_dir = sol_data["dir"] / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out = str(out_dir / "scripts.html")
+        out = str(out_dir / "implementation.html")
 
     # Import the generator (alongside this script in scripts/)
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -479,9 +484,10 @@ Examples:
   python fm_manage.py diagnose HaverSS impact "Shopify_Orders"
   python fm_manage.py diagnose HaverSS orphans
   python fm_manage.py diagnose HaverSS anti-patterns
-  python fm_manage.py paste-html LAYER --script "Close Card Window" -o out.html
-  python fm_manage.py paste-html LAYER --spec picker_spec.json -o picker.html
-  python fm_manage.py paste-html LAYER --script 974 --spec patches.json
+  python fm_manage.py implement LAYER --script "Close Card Window" -o out.html
+  python fm_manage.py implement LAYER --spec picker_spec.json -o picker.html
+  python fm_manage.py implement LAYER --script 974 --spec patches.json
+  # (paste-html and paste are kept as aliases for backward compatibility)
         """
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -531,10 +537,14 @@ Examples:
     sub_diag.add_argument("extra", nargs="*", help="Additional arguments")
     sub_diag.set_defaults(func=cmd_diagnose)
 
-    # paste-html
+    # implement (formerly "paste-html") — build a paste-ready implementation
+    # package (scripts, layouts, schema instructions). The legacy names
+    # "paste-html" and "paste" are kept as aliases for backward compatibility
+    # so existing scripts and muscle memory keep working.
     sub_paste = subparsers.add_parser(
-        "paste-html", aliases=["paste"],
-        help="Build a paste-ready HTML page of scripts (Copy-XML buttons)")
+        "implement", aliases=["paste-html", "paste"],
+        help="Build a paste-ready implementation package "
+             "(scripts, layouts, schema)")
     sub_paste.add_argument("solution", help="Solution name (partial match OK)")
     sub_paste.add_argument("--script", action="append", default=[],
                            help="Existing script name or id to extract (repeatable)")
@@ -544,7 +554,8 @@ Examples:
     sub_paste.add_argument("--no-human", action="store_true",
                            help="Suppress the pseudocode panel (XML only)")
     sub_paste.add_argument("-o", "--output",
-                           help="Output HTML path (default: solutions/<solution>/output/scripts.html)")
+                           help="Output HTML path "
+                                "(default: solutions/<solution>/output/implementation.html)")
     sub_paste.set_defaults(func=cmd_paste_html)
 
     # summary

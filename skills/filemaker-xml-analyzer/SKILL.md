@@ -240,20 +240,24 @@ For MBS plugin paste-back:
 3. Edit the XML or build new steps with `fm_xml_gen.py generate_step_xml()` (supports 23+ step types)
 4. Wrap in FMObjectList format if building from scratch
 
-## Authoring & Delivering Scripts as a Paste-Ready HTML Page
+## Authoring & Delivering an Implementation Package
 
-When you've designed FileMaker scripts during a session — or you want to
-re-deliver an existing one to the user as a copy-pasteable artefact —
-emit a self-contained HTML page where each script has a **Copy XML**
-button. Pasting in FileMaker 18+ Script Workspace materialises the steps
-directly; no MBS plugin needed. The driver is `/fm-paste-html` and the
-underlying generator lives at `scripts/fm_paste_html_gen.py`.
+When you've designed FileMaker scripts during a session — or you need to
+hand the user a coordinated change package covering scripts, layouts, and
+schema — emit a self-contained HTML page where each script has a **Copy
+XML** button and any manual layout/schema steps are numbered alongside.
+Pasting in FileMaker 18+ Script Workspace materialises the steps
+directly; no MBS plugin needed. The driver is `/fm-implement` (formerly
+`/fm-paste-html`) and the underlying generator lives at
+`scripts/fm_paste_html_gen.py`.
 
 ### When to use it
 
 - You designed a new workflow and need to hand the user paste-ready scripts.
 - The user asked to copy an existing script out (extract mode).
 - You're delivering a mixed batch (some new, some existing).
+- The change spans scripts + layouts + schema and needs ordered manual
+  steps for the parts FileMaker can't paste.
 
 Do **not** dump raw `<fmxmlsnippet>` XML into chat — clipboard pasting from
 chat is unreliable and the user loses the pseudocode side panel.
@@ -263,12 +267,14 @@ chat is unreliable and the user loses the pseudocode side panel.
 1. **Index the solution** with `/fm-setup` if it isn't already.
 2. **Discover references** with `/fm-query` (`field`, `layout`, `table`,
    `scripts`) so the spec uses names that actually exist.
-3. **Write a spec JSON** (author mode) — see `/fm-paste-html` for the
+3. **Write a spec JSON** (author mode) — see `/fm-implement` for the
    step-type table. Use `raw_xml` as an escape hatch for any step the
    spec doesn't yet cover, and consider extending
    `scripts/fm_step_builders.py` if you reach for it repeatedly.
-4. **Run** `python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py paste-html
+4. **Run** `python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement
    <solution> --spec <file.json> --script "<name>" -o out.html`.
+   (The legacy `paste-html` / `paste` subcommand names still work as
+   aliases.)
 5. **Present** the HTML with a `computer://` link.
 
 ### Reference resolution

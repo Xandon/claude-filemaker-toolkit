@@ -561,7 +561,7 @@ def _escape_for_html(text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI (normally driven through fm_manage.py paste-html)
+# CLI (normally driven through `fm_manage.py implement`, aliases: paste-html, paste)
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     p = argparse.ArgumentParser(
