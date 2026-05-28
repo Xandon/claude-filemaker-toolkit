@@ -137,3 +137,7 @@ Both review and implementation pages are self-contained (zero external dependenc
 ## Reviewing the Plugin for Efficiency
 
 See [PERFORMANCE.md](./PERFORMANCE.md) for a testing checklist and benchmarks.
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full version history.

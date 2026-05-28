@@ -1,16 +1,17 @@
 ---
 name: filemaker-xml-analyzer
 description: >
-  Analyze, review, and modify FileMaker Pro database solutions via their DDR XML exports.
-  Use this skill whenever the user mentions FileMaker, .fmp12, DDR XML, FM scripts,
+  Analyze, review, and ship changes to FileMaker Pro database solutions via their DDR XML
+  exports. Use this skill whenever the user mentions FileMaker, .fmp12, DDR XML, FM scripts,
   FileMaker layouts, FileMaker schema, FileMaker relationships, or wants to review/debug
   FileMaker script logic. Also trigger when the user uploads or references large XML files
   that contain FMSaveAsXML elements, ScriptCatalog, FieldsForTables, LayoutCatalog, or
   StepsForScripts sections. This skill handles: script code review, cross-reference analysis,
   schema exploration, script translation to human-readable format, dependency mapping, custom
-  function indexing, and generating modified script XML for paste-back via MBS plugin. Even if
-  the user just says "look at my XML" or "help with this script" and the file turns out to be
-  a FileMaker DDR, use this skill.
+  function indexing, and building paste-ready implementation packages (clipboard XML for
+  FM 18+ Script Workspace, no MBS plugin required, plus ordered manual steps for layout and
+  schema changes). Even if the user just says "look at my XML" or "help with this script"
+  and the file turns out to be a FileMaker DDR, use this skill.
 ---
 
 # FileMaker DDR XML Analyzer
@@ -64,14 +65,17 @@ python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py query <solution> <command> [ar
 # Generate an interactive HTML code review
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py review <solution> <review.json>
 
-# Extract a script as MBS-compatible clipboard XML
+# Extract a script as paste-ready clipboard XML (FM 18+)
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py extract <solution> <script_name_or_id>
 
 # Diagnostic commands (hotspots, impact, slow-patterns, health, etc.)
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diagnose <solution> <command>
+
+# Build a paste-ready implementation package (scripts, layouts, schema)
+python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement <solution> --spec spec.json -o out.html
 ```
 
-The plugin exposes three slash commands that wrap these: `/fm-setup`, `/fm-query`, and `/fm-review`.
+The plugin exposes four slash commands that wrap these: `/fm-setup`, `/fm-query`, `/fm-review`, and `/fm-implement`.
 
 ## Query Commands
 
