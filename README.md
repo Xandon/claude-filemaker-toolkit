@@ -1,6 +1,8 @@
 # FileMaker Toolkit
 
-A Cowork plugin for analyzing, reviewing, and modifying FileMaker Pro database solutions via their DDR XML exports. Indexes FileMaker metadata into SQLite for fast querying, generates interactive HTML code reviews, and produces clipboard-compatible XML for MBS plugin paste-back.
+A Cowork plugin for analyzing, reviewing, and shipping changes to FileMaker Pro database solutions via their DDR XML exports. Indexes FileMaker metadata into SQLite for fast querying, generates interactive HTML code reviews, and produces clipboard-compatible XML for paste-back into FileMaker (FM 18+, no MBS plugin required).
+
+**Current version: 0.2.4**
 
 ## What It Does
 
@@ -8,11 +10,11 @@ A Cowork plugin for analyzing, reviewing, and modifying FileMaker Pro database s
 - **Queries** scripts, fields, tables, layouts, relationships, value lists, custom functions, and cross-references
 - **Diagnoses** performance hotspots, anti-patterns, orphaned scripts, duplicates, and health scores
 - **Reviews** scripts interactively — generates self-contained HTML reports with syntax-highlighted steps, severity-rated findings, before/after diffs, and one-click XML copy
-- **Generates** modified script XML for paste-back via the MBS plugin
+- **Implements** changes — builds paste-ready implementation packages bundling new scripts, updates to existing scripts, and ordered manual steps for layout and schema changes
 
 ## Installation
 
-Install as a Cowork plugin. Once installed, the plugin exposes three slash commands (`/fm-setup`, `/fm-query`, `/fm-review`) and a skill (`filemaker-xml-analyzer`) that triggers automatically on FileMaker-related queries.
+Install as a Cowork plugin (Customize → Personal plugins → + → upload `.zip` or `.plugin` bundle). Once installed, the plugin exposes four slash commands (`/fm-setup`, `/fm-query`, `/fm-review`, `/fm-implement`) and a skill (`filemaker-xml-analyzer`) that triggers automatically on FileMaker-related queries.
 
 The plugin requires Python 3.9+ with the standard library only — no external dependencies.
 
@@ -27,8 +29,9 @@ my-client-project/
 └── solutions/
     ├── LAYER/
     │   ├── LAYER.xml          # DDR XML export
-    │   ├── reviews/           # review definition JSONs
-    │   └── output/            # generated HTML, extracted script XML
+    │   ├── reviews/           # review definition JSONs, implementation specs
+    │   └── output/            # generated HTML (reviews, implementation packages),
+    │                          # extracted script XML
     └── ILCrop/
         ├── ILCrop.xml
         ├── reviews/
@@ -47,6 +50,8 @@ Start a Cowork session from the project folder (or point Cowork at it via the fo
 
 4. **Run `/fm-review`** and tell Claude which script(s) you want reviewed. Claude will read the steps, look for issues, and generate a self-contained HTML report in `solutions/<name>/output/`.
 
+5. **Run `/fm-implement`** when you want to ship a change — a new feature, a script update, layout edits, or schema tweaks. Claude assembles an HTML implementation package with **Copy XML** buttons for scripts plus ordered manual steps for anything FileMaker can't paste directly.
+
 ## Commands
 
 ### `/fm-setup`
@@ -57,6 +62,14 @@ Run any query command against an indexed solution. Supports script analysis (`sc
 
 ### `/fm-review`
 Start an interactive code review of one or more scripts. Claude reads the steps, gathers call context, checks custom function usage, writes a review definition JSON, and generates a shareable HTML report.
+
+### `/fm-implement`
+Build a paste-ready implementation package — a single HTML page bundling everything needed to roll a change into the user's FileMaker solution. Each script on the page has a **Copy XML** button that puts FM 18+ clipboard XML on the clipboard (paste straight into Script Workspace — no MBS plugin required). The page can also include ordered manual instructions for layout / schema / relationship / security changes that FileMaker can't paste directly. Two modes:
+
+- **Extract** existing scripts from an indexed solution (redeliver to a different file, branch, or as documentation)
+- **Author** new scripts from a JSON spec — Claude designs the steps, the generator builds the paste-ready XML
+
+(The legacy `fm_manage.py paste-html` / `paste` subcommand names continue to work as aliases for `implement`, so existing scripts and muscle memory keep working.)
 
 ## Running Scripts Directly
 
@@ -69,6 +82,7 @@ python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py query Solution script "My Scri
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py review Solution reviews/my_review.json
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py extract Solution "My Script"
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diagnose Solution hotspots
+python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement Solution --spec spec.json -o out.html
 ```
 
 ## Environment Variables
@@ -95,16 +109,24 @@ Many FileMaker solutions use a standard custom function framework (Error, Declar
 - Displays framework CFs as "framework" chips (styled differently when used by 50+ scripts)
 - Surfaces CF usage in the HTML review so reviewers understand framework-driven error handling patterns
 
-## HTML Review Output
+## HTML Output
 
-Generated review HTML files are self-contained (zero external dependencies, works offline, single-file share). They include:
+Both review and implementation pages are self-contained (zero external dependencies, works offline, single-file share).
+
+**Review reports** (`/fm-review`) include:
 
 - **Overview tab**: findings sorted by severity, clickable to jump to details
 - **Script tabs**: per-script view with syntax-highlighted indented steps
 - **Findings panel**: severity badges, descriptions, best practice callouts, before/after diff views
 - **Custom function chips**: framework references with click-to-scroll-to-usage
-- **One-click XML copy**: copy fix XML or the full corrected script for MBS paste-back
+- **One-click XML copy**: copy the fix XML or the full corrected script for paste-back
 - **Dark theme**: matches FileMaker Script Workspace aesthetic
+
+**Implementation packages** (`/fm-implement`) include:
+
+- **Per-script cards** with pseudocode side panel and a **Copy XML** button (FM 18+ clipboard format)
+- **Manual-step sections** for layout / schema / relationship changes the agent can't paste
+- **Reference resolution** against the DDR — every layout, script, table, and field name is validated before the page is built; mistakes fail loudly with "did you mean…" suggestions
 
 ## Known Limitations
 

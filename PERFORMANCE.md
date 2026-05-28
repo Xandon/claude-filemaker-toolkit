@@ -2,6 +2,8 @@
 
 This guide explains how to verify that the FileMaker Toolkit plugin is performing well — both in raw toolkit execution speed and in how Claude uses it during conversations.
 
+**Applies to version 0.2.4** (four slash commands: `/fm-setup`, `/fm-query`, `/fm-review`, `/fm-implement`).
+
 ## 1. Validate the plugin structure
 
 Before anything else, confirm the plugin manifest and layout are valid:
@@ -57,6 +59,7 @@ Restart Cowork, create a new chat, and walk through each command in order:
 2. `/fm-query <name> hotspots` → verify you get a ranked list
 3. `/fm-query <name> script "<known script>"` → verify the human-readable output matches expectations
 4. `/fm-review` on a known-buggy script → verify the HTML file is generated and opens correctly
+5. `/fm-implement` on either an existing script (extract mode) or a small new-script spec (author mode) → verify the resulting HTML opens, the **Copy XML** button works, and pasting the clipboard into FileMaker Script Workspace materialises the steps cleanly. Also verify the legacy subcommand names still resolve (`fm_manage.py paste-html …` and `fm_manage.py paste …`).
 
 For each command, Claude should:
 - Run the actual toolkit (no fabricated output)
