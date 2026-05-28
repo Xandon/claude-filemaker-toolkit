@@ -8,13 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`/fm-implement` slash command** — replaces `/fm-paste-html` with a broader
-  remit. Builds a paste-ready implementation package for FileMaker changes:
-  Copy-XML buttons for new and existing scripts, plus ordered manual steps for
-  layout / schema / relationship / security changes that FileMaker cannot
-  paste directly.
-- `commands/fm-implement.md` documents the expanded scope, adds Manual-steps
-  and Notes sections to the "what an implementation package can contain"
-  table, and nudges authors to think about rollback for schema changes.
+  remit and a clearer mental model: it's the **end of a design conversation**,
+  not the start of one. The intended flow is:
+  1. User runs `/fm-setup` to index their solution.
+  2. User asks Claude a feature- or change-shaped question
+     ("add a Notes field to Visits and surface it on the detail layout").
+  3. Claude grounds the proposal in the indexed DDR — telling the user
+     exactly which scripts will be added or changed, which layouts to
+     edit, which fields/tables/relationships to add — and the two iterate.
+  4. When the user is satisfied, `/fm-implement` packages the agreed plan
+     as a single self-contained HTML deliverable: Copy-XML buttons for
+     new and existing scripts, plus ordered manual steps for the
+     layout / schema / relationship / security work FileMaker cannot
+     paste directly.
+- `commands/fm-implement.md` re-framed around the above flow. The
+  docstring at the top now explicitly walks Claude through the
+  conversation-first lifecycle and tells it to summarize the plan back
+  to the user before generating, so the deliverable always matches the
+  user's expectations.
 - Top-level `CHANGELOG.md` (this file).
 - `examples/picker_spec_example.json` (synced from upstream) — full reference
   spec for author-mode scripts.

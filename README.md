@@ -6,11 +6,12 @@ A Cowork plugin for analyzing, reviewing, and shipping changes to FileMaker Pro 
 
 ## What It Does
 
+The plugin is built around a simple loop: **index → understand → design → ship**.
+
 - **Indexes** a FileMaker DDR XML export (typically 10–200 MB, UTF-16 LE) into a compact SQLite database in 1–3 seconds
-- **Queries** scripts, fields, tables, layouts, relationships, value lists, custom functions, and cross-references
-- **Diagnoses** performance hotspots, anti-patterns, orphaned scripts, duplicates, and health scores
+- **Understands** your solution — queries scripts, fields, tables, layouts, relationships, value lists, custom functions, and cross-references, and diagnoses performance hotspots, anti-patterns, orphaned scripts, duplicates, and health scores
 - **Reviews** scripts interactively — generates self-contained HTML reports with syntax-highlighted steps, severity-rated findings, before/after diffs, and one-click XML copy
-- **Implements** changes — builds paste-ready implementation packages bundling new scripts, updates to existing scripts, and ordered manual steps for layout and schema changes
+- **Designs and ships changes** with Claude — once your solution is indexed, you can talk to Claude about adding a feature, refactoring a script, or changing schema, and Claude grounds its proposal in your actual fields, layouts, scripts, and relationships. When the plan is agreed, `/fm-implement` packages it as a paste-ready HTML deliverable: new scripts with Copy-XML buttons (FM 18+ clipboard format, no MBS plugin required), and numbered manual steps for the layout / schema work FileMaker can't paste
 
 ## Installation
 
@@ -50,7 +51,9 @@ Start a Cowork session from the project folder (or point Cowork at it via the fo
 
 4. **Run `/fm-review`** and tell Claude which script(s) you want reviewed. Claude will read the steps, look for issues, and generate a self-contained HTML report in `solutions/<name>/output/`.
 
-5. **Run `/fm-implement`** when you want to ship a change — a new feature, a script update, layout edits, or schema tweaks. Claude assembles an HTML implementation package with **Copy XML** buttons for scripts plus ordered manual steps for anything FileMaker can't paste directly.
+5. **Discuss the change you want to make.** Just talk to Claude in plain language — *"I want to add a fungal species picker on the Mold Layers layout"*, *"refactor the Import script so it commits inside the loop"*, *"add a Notes field to Visits and surface it on the Inspection detail layout"*. Claude uses the indexed DDR to ground its proposal in your actual fields, layouts, scripts, and relationships — telling you specifically which scripts will need to be added or changed, which layouts to edit, which fields/tables/relationships to add. Iterate freely: review the plan, ask questions, add constraints, refine.
+
+6. **Run `/fm-implement`** when you're satisfied with the plan. Claude packages everything you agreed on into a single self-contained HTML deliverable in `solutions/<name>/output/`. Open it, work through it top to bottom: for each new or updated script, click **Copy XML** and ⌘V into FileMaker Script Workspace; for layout / schema / relationship / security work, follow the numbered manual steps. The change ships in one session.
 
 ## Commands
 
@@ -64,10 +67,16 @@ Run any query command against an indexed solution. Supports script analysis (`sc
 Start an interactive code review of one or more scripts. Claude reads the steps, gathers call context, checks custom function usage, writes a review definition JSON, and generates a shareable HTML report.
 
 ### `/fm-implement`
-Build a paste-ready implementation package — a single HTML page bundling everything needed to roll a change into the user's FileMaker solution. Each script on the page has a **Copy XML** button that puts FM 18+ clipboard XML on the clipboard (paste straight into Script Workspace — no MBS plugin required). The page can also include ordered manual instructions for layout / schema / relationship / security changes that FileMaker can't paste directly. Two modes:
+Package the change you and Claude have just been designing into a paste-ready HTML deliverable. **This is the end of a design conversation, not the start of one** — by the time you invoke it, you've typically just spent a few minutes (or hours) talking through a feature, a refactor, or a schema update with Claude, using `/fm-query` against the indexed DDR to ground the proposal in real fields, layouts, and scripts. When you're satisfied with the plan, `/fm-implement` builds:
+
+- **Per-script cards** with pseudocode side panel and a **Copy XML** button — paste straight into FileMaker 18+ Script Workspace (no MBS plugin required)
+- **Numbered manual steps** for anything the generator can't paste — layout edits, new fields, relationship changes, security tweaks
+- **Header notes** capturing the goal of the change, paste order, rollback plan, and testing checklist that came out of the conversation
+
+The HTML is fully self-contained — share it, archive it, or just work through it once and discard. Two underlying modes that mix freely on one page:
 
 - **Extract** existing scripts from an indexed solution (redeliver to a different file, branch, or as documentation)
-- **Author** new scripts from a JSON spec — Claude designs the steps, the generator builds the paste-ready XML
+- **Author** new scripts from a JSON spec Claude writes from the conversation
 
 (The legacy `fm_manage.py paste-html` / `paste` subcommand names continue to work as aliases for `implement`, so existing scripts and muscle memory keep working.)
 

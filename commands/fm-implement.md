@@ -1,51 +1,69 @@
 ---
-description: Build a paste-ready implementation package for FileMaker scripts, layouts, and schema changes
+description: Package the feature/change you and the user have been designing into a paste-ready HTML implementation guide
 ---
 
-The user wants a self-contained HTML page that bundles **everything needed
-to implement a change** in their FileMaker solution — a new feature, an
-update to an existing script, a layout adjustment, or a schema tweak. Each
-script on the page has a **Copy XML** button that puts clipboard-format
-FileMaker XML (FM 18+) on the clipboard, ready to paste directly into
-Script Workspace — no MBS plugin needed.
+`/fm-implement` is the **end of a design conversation**, not the start of
+one. By the time the user invokes it, the workflow looks like this:
 
-For non-script work (layout / schema changes) the page also acts as an
-**ordered implementation guide** with step-by-step manual instructions
-alongside the paste-ready script blocks.
+1. The user ran `/fm-setup` earlier and the FileMaker solution is indexed.
+2. The user asked Claude a general feature / change question:
+   *"I want to add a fungal species picker on the Mold Layers layout."*
+   *"Refactor the Import script so it commits inside the loop."*
+   *"Add a Notes field to the Visits table and surface it on the
+   Inspection detail layout."*
+3. Claude used `/fm-query` against the indexed DDR to ground the
+   proposal in the user's actual fields, layouts, scripts, table
+   occurrences, and relationships — and laid out everything that would
+   need to change: new scripts, edits to existing scripts, layout
+   adjustments, schema changes.
+4. The user reviewed the plan, asked follow-ups, added details ("the
+   picker has to be modal", "skip the commit refactor in the legacy
+   Import_v1 path"), and Claude iterated.
+5. Now the user is satisfied with the design and says `/fm-implement`.
 
-## What an implementation package can contain
+**Your job at this point** is to package the agreed plan as a single
+self-contained HTML deliverable the user can open and work through
+top-to-bottom in FileMaker. Every script on the page gets a **Copy XML**
+button that puts FM 18+ clipboard XML on the clipboard, ready to paste
+straight into Script Workspace — no MBS plugin needed. Anything the
+generator cannot paste (layout edits, new fields, relationship changes,
+security tweaks) is rendered as numbered manual steps in the order the
+user should apply them.
 
-| Section | What it is | Use when |
+## What goes on the page
+
+| Section | What it is | Pulled from |
 | --- | --- | --- |
-| **Extract** | Existing scripts from an indexed solution | Re-pasting known scripts (different file, branch, or documentation) |
-| **Author** | New scripts generated from a JSON spec | Claude has just designed scripts and needs to ship them as paste-ready XML |
-| **Manual steps** | Numbered instructions (layout edits, field adds, relationship changes, security tweaks) | The change touches layouts/schema — anything the agent cannot apply via XML paste |
-| **Notes** | Free-form context (rollback plan, paste order, testing checklist) | Documenting *how* to apply the change safely |
+| **Header notes** | Goal of the change, rollback plan, testing checklist, paste order | The design conversation |
+| **Manual steps** | Numbered instructions for layout / schema / relationship / security work | What you and the user agreed had to change in FileMaker's UI |
+| **New scripts** | Author-mode: scripts Claude designed during the conversation | The spec JSON you write in step 3 |
+| **Existing scripts** | Extract-mode: scripts pulled verbatim from the indexed DDR | The user's solution, via `--script <name\|id>` |
 
-One HTML page can mix all four freely. Order matters when scripts call
+One HTML page mixes all four freely. Order matters when scripts call
 each other — list them in the order the user should paste.
 
 ## Workflow
 
-1. **Confirm the solution is indexed.** The HTML generator reads the SQLite
-   `.db` produced by `/fm-setup`. If the user hasn't indexed it, run
-   `/fm-setup` first.
+1. **Sanity check the prerequisites.** The solution must be indexed
+   (i.e. `/fm-setup` has already run for it). If for some reason it
+   hasn't, run `/fm-setup` first — `/fm-implement` cannot guess at
+   field, layout, or script names without it.
 
-2. **Decide what's on the page.** Ask the user what they want to ship:
-   - Which existing scripts to extract (if any)
-   - Which new scripts to author
-   - Any layout / schema / relationship / security changes that require
-     manual steps in FileMaker
+2. **Summarize the agreed plan back to the user before generating.**
+   In one short message, restate what scripts you'll author, which
+   existing scripts you'll extract, and what manual steps you'll
+   include. This catches any mismatch between your understanding and
+   theirs before you build a 1 MB HTML deliverable. Skip this step
+   only if the user explicitly said "just generate it".
 
-   For author mode you may need to discover field / layout / TO names —
-   run `/fm-query <solution> field <pattern>`,
-   `/fm-query <solution> layout <pattern>`,
-   `/fm-query <solution> table <name>` first.
-
-3. **Write the spec JSON** (author mode only). Save it to
-   `solutions/<solution>/reviews/<name>.json` or
-   `solutions/<solution>/output/<name>.spec.json` — see "Spec JSON shape"
-   below, and `examples/picker_spec_example.json` for a full reference.
+3. **Write the spec JSON** capturing the new scripts and manual steps.
+   Save to `solutions/<solution>/output/<feature-name>.spec.json` (or
+   under `reviews/` if the user prefers). See "Spec JSON shape" below
+   and `examples/picker_spec_example.json` for a worked reference.
+   Validate every field / layout / table / script name against the
+   indexed DDR using `/fm-query` **before** putting it in the spec —
+   the generator will reject unknown names with a "did you mean…" list,
+   but it's faster to catch it now.
 
 4. **Run the generator:**
 
@@ -65,10 +83,12 @@ each other — list them in the order the user should paste.
    > muscle memory will keep working.
 
 5. **Present** the HTML with a `computer://` link so the user can open it
-   directly. Tell them: for each script, click **Copy XML**, then in
-   FileMaker open the target script in Script Workspace and ⌘V / Ctrl+V.
-   For manual layout / schema steps, follow them in order — the page
-   numbers them so it's easy to track progress.
+   directly. Tell them: work through the page top to bottom — for each
+   script card, click **Copy XML**, switch to FileMaker, open the target
+   script in Script Workspace, and ⌘V / Ctrl+V. For manual steps, do
+   them in order — the page numbers them so it's easy to track progress.
+   Close the loop by asking if anything else needs adjusting before
+   they consider the change shipped.
 
 ## Spec JSON shape (author mode)
 

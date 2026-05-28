@@ -244,42 +244,73 @@ For MBS plugin paste-back:
 3. Edit the XML or build new steps with `fm_xml_gen.py generate_step_xml()` (supports 23+ step types)
 4. Wrap in FMObjectList format if building from scratch
 
-## Authoring & Delivering an Implementation Package
+## Designing & Shipping Changes
 
-When you've designed FileMaker scripts during a session — or you need to
-hand the user a coordinated change package covering scripts, layouts, and
-schema — emit a self-contained HTML page where each script has a **Copy
-XML** button and any manual layout/schema steps are numbered alongside.
-Pasting in FileMaker 18+ Script Workspace materialises the steps
-directly; no MBS plugin needed. The driver is `/fm-implement` (formerly
-`/fm-paste-html`) and the underlying generator lives at
-`scripts/fm_paste_html_gen.py`.
+The most common way a session unfolds: the user has indexed their solution
+with `/fm-setup`, then asks a feature-shaped or change-shaped question
+("add a fungal picker", "refactor the Import script", "add a Notes field
+on Visits and surface it on the detail layout"). Your job in these
+conversations is to **act as a senior FileMaker developer pairing with
+the user**:
 
-### When to use it
+1. **Ground every proposal in the indexed DDR.** Before you suggest a
+   script change, run `/fm-query <solution> script <name>` to read it.
+   Before you suggest a new field or layout, run the corresponding
+   `/fm-query field` / `layout` / `table` lookup to confirm names and
+   structure. Never propose changes that reference fields, scripts, or
+   layouts that don't actually exist in the solution.
+2. **Lay out what would have to change.** New scripts, edits to existing
+   scripts, new fields, layout adjustments, relationship changes,
+   security tweaks. Be explicit about which scripts touch which fields,
+   which custom functions are involved, and which existing call sites
+   would be affected.
+3. **Iterate.** The user will review the plan, ask questions, push back,
+   add constraints. Refine the design before any code is generated.
+4. **When the user is satisfied, ship it via `/fm-implement`.** That
+   command (formerly `/fm-paste-html`) packages the agreed design as a
+   single self-contained HTML deliverable: paste-ready scripts with
+   **Copy XML** buttons (FM 18+ Script Workspace, no MBS plugin), plus
+   numbered manual steps for the layout / schema / security work that
+   can't be pasted. The driver doc is at `commands/fm-implement.md` and
+   the underlying generator is `scripts/fm_paste_html_gen.py`.
 
-- You designed a new workflow and need to hand the user paste-ready scripts.
-- The user asked to copy an existing script out (extract mode).
-- You're delivering a mixed batch (some new, some existing).
-- The change spans scripts + layouts + schema and needs ordered manual
-  steps for the parts FileMaker can't paste.
+Do **not** dump raw `<fmxmlsnippet>` XML into chat — clipboard pasting
+from chat is unreliable, the user loses the pseudocode side panel, and
+manual steps lose their numbered ordering. Always hand off via the
+generated HTML.
 
-Do **not** dump raw `<fmxmlsnippet>` XML into chat — clipboard pasting from
-chat is unreliable and the user loses the pseudocode side panel.
+### When to invoke the generator directly
 
-### Workflow
+Most of the time it's invoked through `/fm-implement` at the end of a
+design conversation. You may also call it directly when:
 
-1. **Index the solution** with `/fm-setup` if it isn't already.
-2. **Discover references** with `/fm-query` (`field`, `layout`, `table`,
-   `scripts`) so the spec uses names that actually exist.
-3. **Write a spec JSON** (author mode) — see `/fm-implement` for the
-   step-type table. Use `raw_xml` as an escape hatch for any step the
-   spec doesn't yet cover, and consider extending
-   `scripts/fm_step_builders.py` if you reach for it repeatedly.
-4. **Run** `python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement
-   <solution> --spec <file.json> --script "<name>" -o out.html`.
-   (The legacy `paste-html` / `paste` subcommand names still work as
-   aliases.)
-5. **Present** the HTML with a `computer://` link.
+- The user just asks to extract an existing script as paste-ready XML
+  (no design conversation needed) — pass `--script <name|id>`.
+- You're redelivering a known batch to a different file or branch.
+- A fully-written spec JSON already exists from a previous session.
+
+### Manual invocation
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement \
+    <solution> --spec <file.json> --script "<name>" -o out.html
+```
+
+(The legacy `paste-html` / `paste` subcommand names still work as
+aliases for `implement`.)
+
+### Spec JSON authoring tips
+
+- Validate every field / layout / table / script name against the
+  indexed DDR *before* putting it in the spec — the generator rejects
+  unknown names with a "did you mean…" list, but catching it earlier
+  is faster.
+- Use `raw_xml` as an escape hatch for any step the spec doesn't yet
+  cover. If you reach for it repeatedly, extend
+  `scripts/fm_step_builders.py` so the next session has the helper.
+- Always include a header comment block per authored script — Purpose,
+  Called From, Author, Created, Parameters — to match solution
+  conventions.
 
 ### Reference resolution
 
