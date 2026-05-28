@@ -47,3 +47,6 @@ review_output/
 # ---- Removed upstream (cannot physically delete in sandbox; rm locally) ----
 scripts/fm_diff.py
 scripts/fm_graph.py
+
+# Removed deprecation pointer (file may persist in sandbox view; ignore it)
+commands/fm-paste-html.md
