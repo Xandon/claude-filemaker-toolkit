@@ -44,6 +44,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sqlite3
 import sys
 from contextlib import redirect_stdout
@@ -495,9 +496,15 @@ def generate_paste_html(db_path: str,
                 spec = _load_spec(payload)
                 if "meta" in spec and not meta.get("title"):
                     meta["title"] = spec["meta"].get("title")
-                if "meta" in spec and spec["meta"].get("notes") and not notice_html:
-                    # auto-promote spec notes to the notice block
-                    notice_html = _escape_for_html(spec["meta"]["notes"])
+                if "meta" in spec and not notice_html:
+                    # Prefer structured fields (subtitle/prereqs/manual_steps/
+                    # reuse/rollback). Fall back to free-form `notes` if no
+                    # structured fields are present.
+                    structured = _render_structured_notice(spec["meta"])
+                    if structured:
+                        notice_html = structured
+                    elif spec["meta"].get("notes"):
+                        notice_html = _escape_for_html(spec["meta"]["notes"])
                 for s in spec.get("scripts", []):
                     scripts_payload.append(
                         _build_authored_script(s, resolver)
@@ -560,6 +567,114 @@ def _escape_for_html(text: str) -> str:
     return _h.escape(text).replace("\n", "<br>")
 
 
+def _md_inline(text: str) -> str:
+    """Very limited Markdown -> HTML for structured-notice prose fields.
+
+    Escapes HTML first, then supports three inline patterns:
+        `code`     ->  <code>code</code>
+        **bold**   ->  <b>bold</b>
+        *italic*   ->  <i>italic</i>
+    """
+    import html as _h
+    s = _h.escape(text)
+    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    s = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"(?<!\*)\*([^*\s][^*]*[^*\s]|[^*\s])\*(?!\*)", r"<i>\1</i>", s)
+    return s
+
+
+def _render_structured_notice(meta: Dict[str, Any]) -> Optional[str]:
+    """Render structured `meta` fields into the polished notice HTML block.
+
+    Supported fields (all optional; returns None if none present, so the
+    caller can fall back to free-form meta.notes via _escape_for_html):
+
+        meta.subtitle        str         one-line summary under the title
+        meta.prereqs         [str]       pill row of preconditions
+        meta.manual_steps    [step]      numbered step cards.
+                                         Each step: title, body, code, done_when
+        meta.reuse           {step}      bottom-left card (reuse variant)
+        meta.rollback        [str]       bullet list in bottom-right card
+        meta.rollback_note   str         small footnote under rollback list
+
+    Prose fields (title, body, done_when, prereqs items, rollback items,
+    rollback_note, reuse.title/body) accept inline markdown-lite via
+    _md_inline. `code` is HTML-escaped only (no markdown).
+
+    The rendered block uses CSS classes provided by paste_template.html
+    (.impl-wrap, .impl-card, .impl-prereqs, .impl-steps, .impl-step,
+    .impl-side, .impl-rollback) so authors do not have to ship CSS in
+    the spec.
+    """
+    has = lambda k: meta.get(k) not in (None, "", [], {})
+    structural_keys = ("subtitle", "prereqs", "manual_steps",
+                       "reuse", "rollback", "rollback_note")
+    if not any(has(k) for k in structural_keys):
+        return None
+
+    import html as _h
+    out: List[str] = ['<div class="impl-wrap">']
+
+    if has("subtitle") or has("prereqs"):
+        out.append('  <div class="impl-card">')
+        if has("subtitle"):
+            out.append(f'    <p class="sub">{_md_inline(meta["subtitle"])}</p>')
+        if has("prereqs"):
+            pills = "".join(f"<span>{_md_inline(p)}</span>" for p in meta["prereqs"])
+            out.append(f'    <div class="impl-prereqs">{pills}</div>')
+        out.append("  </div>")
+
+    if has("manual_steps"):
+        out.append('  <div class="impl-steps">')
+        for i, step in enumerate(meta["manual_steps"], 1):
+            out.append('    <div class="impl-step">')
+            out.append(f'      <div class="num">{i}</div>')
+            out.append('      <div class="body">')
+            if step.get("title"):
+                out.append(f'        <h3>{_md_inline(step["title"])}</h3>')
+            if step.get("body"):
+                out.append(f'        <p>{_md_inline(step["body"])}</p>')
+            if step.get("code"):
+                out.append(f'        <pre>{_h.escape(step["code"])}</pre>')
+            if step.get("done_when"):
+                out.append(f'        <div class="done">{_md_inline(step["done_when"])}</div>')
+            out.append("      </div>")
+            out.append("    </div>")
+        out.append("  </div>")
+
+    side_blocks: List[str] = []
+    reuse = meta.get("reuse") or {}
+    if reuse.get("body") or reuse.get("code") or reuse.get("title"):
+        block = ['    <div class="impl-card">']
+        if reuse.get("title"):
+            block.append(f'      <h3>{_md_inline(reuse["title"])}</h3>')
+        if reuse.get("body"):
+            block.append(f'      <p>{_md_inline(reuse["body"])}</p>')
+        if reuse.get("code"):
+            block.append(f'      <pre>{_h.escape(reuse["code"])}</pre>')
+        block.append("    </div>")
+        side_blocks.append("\n".join(block))
+
+    if has("rollback") or has("rollback_note"):
+        block = ['    <div class="impl-card impl-rollback">']
+        block.append("      <h3>Rollback</h3>")
+        if has("rollback"):
+            items = "".join(f"<li>{_md_inline(x)}</li>" for x in meta["rollback"])
+            block.append(f"      <ul>{items}</ul>")
+        if has("rollback_note"):
+            block.append(f'      <p class="rollback-note">{_md_inline(meta["rollback_note"])}</p>')
+        block.append("    </div>")
+        side_blocks.append("\n".join(block))
+
+    if side_blocks:
+        out.append('  <div class="impl-side">')
+        out.extend(side_blocks)
+        out.append("  </div>")
+
+    out.append("</div>")
+    return "\n".join(out)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI (normally driven through `fm_manage.py implement`, aliases: paste-html, paste)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -576,6 +691,11 @@ def main():
     p.add_argument("--no-human", action="store_true",
                    help="Suppress the pseudocode panel (XML only)")
     p.add_argument("-o", "--output", required=True, help="Output HTML path")
+    p.add_argument("--notice-html-file",
+                   help="Path to a file whose contents are injected as the notice "
+                        "block, raw (no escaping). Overrides spec.meta.notes and "
+                        "structured meta fields. Use when you want full control "
+                        "over the notice HTML.")
     args = p.parse_args()
 
     items: List[Tuple[str, Any]] = []
@@ -586,6 +706,10 @@ def main():
     if not items:
         p.error("Provide at least one --script or --spec.")
 
+    notice_html = None
+    if args.notice_html_file:
+        notice_html = Path(args.notice_html_file).read_text(encoding="utf-8")
+
     try:
         out = generate_paste_html(
             db_path=args.db_path,
@@ -593,6 +717,7 @@ def main():
             output_path=args.output,
             title=args.title,
             include_human=not args.no_human,
+            notice_html=notice_html,
         )
     except (ResolveError, SpecError) as e:
         print(f"ERROR: {e}", file=sys.stderr)

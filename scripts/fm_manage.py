@@ -404,6 +404,14 @@ def cmd_paste_html(args):
         print(f"Could not import fm_paste_html_gen: {e}")
         sys.exit(1)
 
+    notice_html = None
+    if getattr(args, "notice_html_file", None):
+        nh_path = Path(args.notice_html_file)
+        if not nh_path.exists():
+            print(f"ERROR: --notice-html-file not found: {nh_path}")
+            sys.exit(2)
+        notice_html = nh_path.read_text(encoding="utf-8")
+
     try:
         result_path = generate_paste_html(
             db_path=str(sol_data["db"]),
@@ -412,6 +420,7 @@ def cmd_paste_html(args):
             title=args.title,
             include_human=not args.no_human,
             extra_pills=[f"Solution: {sol_name}"],
+            notice_html=notice_html,
         )
     except (ResolveError, SpecError) as e:
         print(f"ERROR: {e}")
@@ -553,6 +562,10 @@ Examples:
     sub_paste.add_argument("--title", help="Page title")
     sub_paste.add_argument("--no-human", action="store_true",
                            help="Suppress the pseudocode panel (XML only)")
+    sub_paste.add_argument("--notice-html-file",
+                            help="Inject raw HTML as the notice block (no escaping). "
+                                 "Overrides spec.meta.notes and structured meta fields. "
+                                 "Use when you want full control over the notice HTML.")
     sub_paste.add_argument("-o", "--output",
                            help="Output HTML path "
                                 "(default: solutions/<solution>/output/implementation.html)")

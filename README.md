@@ -2,7 +2,7 @@
 
 A Cowork plugin for analyzing, reviewing, and shipping changes to FileMaker Pro database solutions via their DDR XML exports. Indexes FileMaker metadata into SQLite for fast querying, generates interactive HTML code reviews, and produces clipboard-compatible XML for paste-back into FileMaker (FM 18+, no MBS plugin required).
 
-**Current version: 0.2.4**
+**Current version: 0.2.5**
 
 ## What It Does
 

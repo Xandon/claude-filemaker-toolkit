@@ -76,6 +76,92 @@ header.page p {
 }
 .notice.hidden { display: none; }
 
+/* Structured notice block (rendered by fm_paste_html_gen._render_structured_notice).
+   When the spec provides meta.subtitle / meta.prereqs / meta.manual_steps /
+   meta.reuse / meta.rollback, the notice container hosts these classes
+   instead of free-form text. The first rule neutralizes the warning-amber
+   container styling above so the structured content sits on the page bg. */
+.notice:has(> .impl-wrap) {
+  background: transparent;
+  border: 0;
+  border-left: 0;
+  padding: 0;
+  color: inherit;
+  font-size: 0.92rem;
+}
+.impl-wrap { display: flex; flex-direction: column; gap: 16px; }
+.impl-card {
+  background: #252538;
+  border: 1px solid #3a3a5c;
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+.impl-card h2 { margin: 0 0 4px; font-size: 1.1rem; font-weight: 500; color: #e8e8f0; }
+.impl-card .sub { margin: 0; color: #9090b0; font-size: 0.88rem; line-height: 1.55; }
+.impl-prereqs {
+  display: flex; gap: 6px 18px; flex-wrap: wrap;
+  font-size: 0.82rem; color: #b0b0d0; margin-top: 12px;
+}
+.impl-prereqs span::before { content: "\2022  "; color: #5e9cf0; font-weight: 500; }
+
+.impl-steps { display: flex; flex-direction: column; gap: 10px; }
+.impl-step {
+  display: flex; gap: 14px; padding: 14px 16px;
+  background: #1f1f30; border: 1px solid #3a3a5c; border-radius: 6px;
+}
+.impl-step .num {
+  flex: 0 0 28px; height: 28px; width: 28px; border-radius: 50%;
+  background: #3a3a5c; color: #e8e8f0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 500;
+}
+.impl-step .body { flex: 1; min-width: 0; }
+.impl-step h3 { margin: 4px 0 6px; font-size: 0.95rem; font-weight: 500; color: #e8e8f0; }
+.impl-step p { margin: 0 0 8px; color: #c8c8e0; line-height: 1.55; font-size: 0.86rem; }
+.impl-step p:last-child { margin-bottom: 0; }
+.impl-step code,
+.impl-side code {
+  background: #14141f; color: #ffd070;
+  padding: 1px 6px; border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em;
+}
+.impl-step pre,
+.impl-side pre {
+  background: #14141f; color: #d8d8e8;
+  padding: 10px 12px; border-radius: 4px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.78rem; line-height: 1.5;
+  overflow-x: auto; margin: 8px 0; white-space: pre;
+  border-left: 2px solid #b06ef0;
+}
+.impl-step .done {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 10px; font-size: 0.8rem; color: #63c490;
+}
+.impl-step .done::before { content: "\2713"; font-weight: 500; font-size: 0.95rem; }
+.impl-step b, .impl-side b { color: #e8e8f0; font-weight: 500; }
+.impl-step i, .impl-side i {
+  color: #b0b0d0; font-style: normal;
+  border-bottom: 1px dotted #6e5520; padding-bottom: 1px;
+}
+
+.impl-side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.impl-side .impl-card { padding: 14px 16px; }
+.impl-side h3 { margin: 0 0 8px; font-size: 0.92rem; font-weight: 500; color: #e8e8f0; }
+.impl-side p { color: #b0b0d0; font-size: 0.82rem; line-height: 1.55; margin: 4px 0; }
+.impl-side ul {
+  margin: 4px 0 0 0; padding-left: 18px;
+  color: #c8c8e0; font-size: 0.82rem; line-height: 1.7;
+}
+.impl-side pre {
+  padding: 8px 10px; font-size: 0.74rem; line-height: 1.45;
+  margin: 8px 0 0 0; border-left-color: #b06ef0;
+}
+.impl-side .rollback-note { margin-top: 10px; color: #9090b0; }
+.impl-rollback { border-left: 3px solid #c87878; }
+
+@media (max-width: 720px) { .impl-side { grid-template-columns: 1fr; } }
+
 .script-card {
   background: #252538;
   border: 1px solid #3a3a5c;

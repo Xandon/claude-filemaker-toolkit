@@ -73,8 +73,14 @@ each other — list them in the order the user should paste.
        [--spec  <file.json>   ...]   \
        [--title "<page title>"]      \
        [--no-human]                  \
+       [--notice-html-file <path>]   \
        [-o <output.html>]
    ```
+
+   `--notice-html-file` is a power-user escape hatch: its contents are
+   injected verbatim into the notice block at the top of the page with
+   no escaping. Use only when the structured `meta.*` schema (see below)
+   can't express what you need.
 
    Default output is `solutions/<solution>/output/implementation.html`.
 
@@ -98,7 +104,33 @@ each other — list them in the order the user should paste.
     "title": "Fungal Picker Scripts",
     "author": "Xandon",
     "date": "2026-05-20",
-    "notes": "Paste order matters: Open → Toggle → Add → Cancel."
+    "subtitle": "Adds a card-window picker for fungal species, called from Mold Air DE.",
+    "prereqs": [
+      "FileMaker Pro 18+",
+      "Edit privileges on the solution"
+    ],
+    "manual_steps": [
+      {
+        "title": "Name the picker layout",
+        "body": "Open Manage Layouts. Make sure `Fungal Species_Air Fungal Spores - Picker` exists and is set to the **Fungal Species** TO.",
+        "done_when": "Layout opens in Browse mode and shows the species fields."
+      },
+      {
+        "title": "Paste the script",
+        "body": "Click **Copy XML** below, then ⌘V into a new script named `Fungal Picker — Open Card Window`.",
+        "done_when": "Script Workspace shows the new script with no errors."
+      }
+    ],
+    "reuse": {
+      "title": "Reuse the pattern",
+      "body": "To open a different picker, change the `layout` argument on the `new_card_window` step and re-paste."
+    },
+    "rollback": [
+      "Delete the picker button from Mold Air DE.",
+      "Delete the `Fungal Picker — Open Card Window` script."
+    ],
+    "rollback_note": "No schema changes were made.",
+    "notes": "(Free-form notes — used only when no structured fields are present. Legacy specs continue to render via this field.)"
   },
   "scripts": [
     {
@@ -123,6 +155,43 @@ each other — list them in the order the user should paste.
   ]
 }
 ```
+
+### Meta fields — the implementation notice block
+
+The fields under `meta` (other than `title` / `author` / `date`) populate the
+notice block that sits above the scripts on the rendered page. Order of
+precedence: any structured field beats `meta.notes`; `--notice-html-file`
+beats everything (raw-HTML escape hatch).
+
+| Field | Type | Renders as |
+| --- | --- | --- |
+| `subtitle` | string | One-line summary card under the title |
+| `prereqs` | array of strings | Pill row of preconditions |
+| `manual_steps` | array of step objects | Numbered step cards (see below) |
+| `reuse` | object: `{title, body, code}` | Bottom-left card |
+| `rollback` | array of strings | Bullet list in the bottom-right card |
+| `rollback_note` | string | Small footnote under the rollback list |
+| `notes` | string | Free-form fallback — used only if no structured field is present. Newlines become `<br>` |
+
+Each entry in `manual_steps` is an object:
+
+| Field | Type | Renders as |
+| --- | --- | --- |
+| `title` | string | Step heading |
+| `body` | string | Prose paragraph |
+| `code` | string | `<pre>` block — typical use: a script parameter calculation, an example expression |
+| `done_when` | string | Green "✓" success-criteria line under the body |
+
+**Inline formatting.** Prose fields (`subtitle`, `body`, `done_when`,
+`prereqs[*]`, `rollback[*]`, `rollback_note`, `reuse.title`, `reuse.body`)
+support a tiny subset of Markdown:
+
+- `` `code` `` → `<code>` for FileMaker identifiers, paths, field names
+- `**bold**` → emphasis for labels and UI text
+- `*italic*` → muted dotted-underline for menu items / contextual hints
+
+`code` blocks (`manual_steps[*].code`, `reuse.code`) are HTML-escaped only —
+Markdown is **not** applied so calculation expressions render literally.
 
 ### Step types
 

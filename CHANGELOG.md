@@ -4,6 +4,64 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] — 2026-05-28
+
+### Added
+- **Structured implementation-notice block.** The notice block at the top
+  of an `/fm-implement` HTML page can now be populated from first-class
+  `meta.*` fields instead of a single free-form `meta.notes` string.
+  Renders as a subtitle card, a pill row of preconditions, numbered
+  manual-step cards (each with `title`, `body`, optional `<pre>` `code`
+  block, and a green ✓ `done_when` line), a bottom-left "reuse" card,
+  and a bottom-right rollback list with optional footnote — instead of
+  the legacy amber free-form callout.
+- New `meta` fields: `subtitle`, `prereqs`, `manual_steps`, `reuse`,
+  `rollback`, `rollback_note`. All optional. If none are set, the
+  renderer falls back to `meta.notes` exactly as before — existing
+  specs keep rendering with no changes.
+- **Inline markdown-lite** in prose fields (`subtitle`, `body`,
+  `done_when`, list items, `reuse.*` prose): `` `code` `` → `<code>`,
+  `**bold**` → `<b>`, `*italic*` → muted dotted-underline (suits FM
+  menu items / contextual hints). `code` blocks
+  (`manual_steps[*].code`, `reuse.code`) are HTML-escaped only —
+  Markdown is not applied so calculation expressions render literally.
+- **`--notice-html-file <path>`** CLI flag on `fm_manage.py implement`
+  (and on `fm_paste_html_gen.py` directly) — power-user escape hatch
+  that injects raw HTML into the notice block with no escaping. Use
+  only when the structured schema can't express what you need; it
+  beats both the structured renderer and `meta.notes` in precedence.
+- New `_md_inline()` and `_render_structured_notice()` helpers in
+  `scripts/fm_paste_html_gen.py`; the `spec` branch in
+  `generate_paste_html()` tries the structured renderer first and
+  falls back to the legacy `meta.notes` path.
+- `.impl-*` CSS classes hosted in `templates/paste_template.html` so
+  spec authors don't need to ship CSS inline; a `:has()` rule
+  neutralises the legacy amber notice container when structured
+  content is present.
+
+### Changed
+- `commands/fm-implement.md`: replaced the spec example with one that
+  exercises the new structured fields, and added a "Meta fields — the
+  implementation notice block" reference table covering the field
+  shapes, `manual_steps[*]` schema, and the markdown-lite rules.
+- `skills/filemaker-xml-analyzer/SKILL.md`: new "Notice block: manual
+  steps & rollback" subsection under "Designing & Shipping Changes",
+  with the Portal Snapshot worked example and the markdown-lite
+  reference. Tells Claude to prefer structured fields over the legacy
+  `meta.notes` for any change that spans more than a single script.
+- `plugin.json`: version `0.2.4` → `0.2.5`.
+
+### Backward compatibility
+- Specs that only use `meta.notes` continue to render via the legacy
+  free-form amber-callout path. The structured renderer is opt-in:
+  it only activates when at least one structured field is set.
+
+### Verified
+- End-to-end run of `fm_manage.py implement` against the converted
+  Portal Snapshot spec (using the new structured fields) produced the
+  polished card / numbered-step layout that the design preview
+  established.
+
 ## [0.2.4] — 2026-05-28
 
 ### Added
@@ -118,6 +176,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.2.5]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.3
 [0.1.0]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.1.0

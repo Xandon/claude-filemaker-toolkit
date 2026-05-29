@@ -325,6 +325,82 @@ Any miss fails loudly with a "did you mean…" list of nearby names — fix
 the spec before regenerating. FileMaker pastes that fall back to
 name-only matching are silently lossy.
 
+### Notice block: manual steps & rollback
+
+The notice block at the top of the implementation page is for everything
+FileMaker can't paste — layout edits, button creation, schema tweaks,
+testing instructions, rollback plan. Always populate it when the change
+spans more than a single script.
+
+Prefer the **structured `meta` fields** (renders as cards, numbered steps,
+done-when checkmarks, side-by-side reuse + rollback grid) over the legacy
+free-form `meta.notes` string (renders as plain text with `<br>` line
+breaks). Use `meta.notes` only for terse one-liners or when migrating an
+old spec; new specs should use the structured fields.
+
+Field reference (all optional, all populate the notice block):
+
+| `meta` field | Renders as |
+| --- | --- |
+| `subtitle` | One-line summary card under the page title |
+| `prereqs` | Pill row of preconditions |
+| `manual_steps` | Numbered step cards, each with `title` / `body` / `code` / `done_when` |
+| `reuse` | Bottom-left card: `{title, body, code}` — alternate parameter or extension pattern |
+| `rollback` | Bullet list in the bottom-right card |
+| `rollback_note` | Small footnote under the rollback list |
+| `notes` | Free-form fallback — used only if no structured field is set |
+
+Inline prose (`subtitle`, `body`, `done_when`, list items, `reuse.*` prose)
+supports a tiny Markdown subset:
+
+- `` `code` `` → `<code>` — use for FileMaker identifiers, layout / field /
+  script names, paths
+- `**bold**` → emphasis for labels and UI text
+- `*italic*` → muted dotted-underline for menu items and contextual hints
+
+`code` blocks (`manual_steps[*].code`, `reuse.code`) are HTML-escaped only,
+not Markdown-processed — calculation expressions render literally.
+
+Worked example (the Portal Snapshot — Headers Sample spec):
+
+```json
+"meta": {
+  "title": "Portal Snapshot — Headers Sample",
+  "subtitle": "Adds a button to Headers Sample that captures the first N rows of the line-items portal into `$$PORTAL.SNAPSHOT` as a JSON array.",
+  "prereqs": [
+    "FileMaker Pro 18+",
+    "Edit privileges on the solution",
+    "Headers Sample is the active layout"
+  ],
+  "manual_steps": [
+    {
+      "title": "Name the portal",
+      "body": "Layout Mode (⌘L). Click the line-items portal. Inspector → Position → set **Name** to `portal.lineItems`.",
+      "done_when": "Re-selecting the portal shows `portal.lineItems` in the Name field."
+    },
+    {
+      "title": "Add the button",
+      "body": "Label: Snapshot 5 rows. Action: Perform Script → Capture Portal Snapshot. Parameter:",
+      "code": "JSONSetElement ( \"\" ;\n  [ \"portal\" ; \"portal.lineItems\" ; JSONString ] ;\n  [ \"rows\"   ; 5                  ; JSONNumber ]\n)",
+      "done_when": "Clicking the button runs without an error dialog."
+    }
+  ],
+  "reuse": {
+    "title": "Reuse on other portals",
+    "body": "Parameter-driven — change the `portal` value and edit the `$row` field references for the new context."
+  },
+  "rollback": [
+    "Delete the button from Headers Sample.",
+    "Delete the `Capture Portal Snapshot` script."
+  ],
+  "rollback_note": "No schema changes were made."
+}
+```
+
+If the structured fields can't express what you need, pass
+`--notice-html-file <path>` to `fm_manage.py implement` to inject raw
+HTML. That bypasses both the structured renderer and `meta.notes`.
+
 ## FileMaker XML Structure Reference
 
 The DDR XML has this high-level structure:
