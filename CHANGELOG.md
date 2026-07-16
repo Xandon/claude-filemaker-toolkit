@@ -4,6 +4,89 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-16
+
+### Fixed
+- **True streaming DDR indexer.** `fm_parser.py` no longer holds the whole
+  document in memory. A real-world 187 MB UTF-16 DDR from ILCrop
+  (`125 tables / 4,046 fields / 845 scripts / 25,970 steps / 483 layouts /
+  624 relationships / 230 value lists / 162 custom functions`) previously
+  peaked at 4–8 GB RSS in the ~4 GB Cowork sandbox and hung indefinitely.
+  The new path targets < 500 MB peak on the same file. Two stages, both
+  bounded by chunk / catalog size rather than document size:
+
+  1. **Stream-transcode to UTF-8.** The source file is read in 1 MiB
+     chunks through `codecs.getincrementaldecoder(<encoding>)`, invalid
+     XML 1.0 control characters are stripped with a precomputed
+     `str.translate` table (much cheaper than regex over hundreds of MB),
+     the XML declaration is rewritten from `encoding="UTF-16"` to
+     `encoding="UTF-8"`, and the result is written to a
+     `tempfile.NamedTemporaryFile`. The temp file is unlinked in a
+     `finally` block.
+  2. **iterparse dispatch.** The temp file is walked with
+     `ET.iterparse(events=('start','end'))`. On each catalog `end`
+     event (`FieldsForTables`, `ValueListCatalog`, `RelationshipCatalog`,
+     `ScriptCatalog`, `LayoutCatalog`, `ExternalDataSourceCatalog`,
+     `CustomFunctionCatalog` / `CustomFunctionsCatalog`) and on each
+     inner `Script` end event within `StepsForScripts`, the fully-built
+     element is dispatched to a per-catalog handler and then cleared,
+     so peak memory tracks the single largest catalog / script block —
+     not the whole document. State flags (`in_add_action`,
+     `in_steps_for_scripts`) restrict extraction to the top-level
+     `<AddAction>` container, matching the DOM parser's behaviour on
+     diff-shaped DDRs that also carry `<ModifyAction>` / `<DeleteAction>`.
+
+- Verified: byte-identical row counts and step content (`raw_xml`,
+  `human_readable`) between the streaming and DOM paths on two real
+  FileMaker exports (PBS_Widget: 3 tables, 18 scripts, 285 steps;
+  PBS Demo — Maps Widget: 1 table, 31 scripts, 626 steps). Streaming
+  peak RSS was 17 MB on both, vs 23 MB / 30 MB for the DOM path — the
+  streaming path is roughly flat while the DOM path scales with file
+  size.
+
+### Added
+- **Per-catalog handler functions in `fm_parser.py`**. The inline
+  extraction logic that used to live in `index_file` is now factored
+  into eight module-level handlers (`_handle_fields_for_tables`,
+  `_handle_value_list_catalog`, `_handle_relationship_catalog`,
+  `_handle_script_catalog`, `_handle_layout_catalog`,
+  `_handle_external_data_source_catalog`,
+  `_handle_custom_function_catalog`, `_handle_script_block`) plus a
+  shared `_build_cf_cross_references` for the CF cross-reference pass
+  and `_print_summary_and_close` for the finalize path. Same SQL,
+  same schema, unchanged behaviour — just reusable and testable.
+- `parse_xml_dom()` — the legacy whole-file-in-memory parser, kept as
+  a fallback and used by `index_file(..., use_dom=True)` for parity
+  checks.
+- `index_file(xml_path, db_path, use_dom=False)` new parameter selects
+  streaming (default) or DOM. External callers keep working — the
+  signature is backwards-compatible.
+- **Peak-RSS reporting.** `_print_summary_and_close` prints `Peak RSS: N MB`
+  after every `index` run (POSIX only; skipped on Windows). Uses
+  `resource.getrusage(RUSAGE_SELF).ru_maxrss` with per-platform
+  normalisation (macOS reports bytes, Linux reports KiB).
+- **Large-file guard in `/fm-setup`.** New step 0 tells Claude to check
+  the XML file size and available RAM before indexing. If the file is
+  > 50 MB AND available RAM is less than 4× the file size, Claude is
+  now instructed to offer the user two escape hatches instead of
+  grinding through in-sandbox:
+  1. Cloud session — gzip the DDR (compresses 10–20×) and re-run
+     `/fm-setup` from a cloud session with more RAM.
+  2. Native run — hand the user a paste-ready Terminal command that
+     runs the pure-stdlib scripts locally (no `pip install` required),
+     then verify the resulting index over the shared folder.
+
+  With the streaming indexer landed, this guard should rarely trigger,
+  but it stays as a safety net for older installs and pathological
+  files.
+
+### Changed
+- `plugin.json` version `0.2.5` → `0.3.0`.
+- `PERFORMANCE.md`: memory characteristics updated to reflect the
+  streaming path.
+- No new dependencies. Scripts remain pure standard library (they get
+  copied to user machines and run with the system `python3`).
+
 ## [0.2.5] — 2026-05-28
 
 ### Added
@@ -176,6 +259,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.0]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.3

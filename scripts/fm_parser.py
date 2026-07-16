@@ -21,6 +21,11 @@ from io import StringIO
 import argparse
 import json
 import time
+import tempfile
+try:
+    import resource  # POSIX only; used for peak-RSS reporting
+except ImportError:  # pragma: no cover — Windows
+    resource = None
 
 
 def create_db(db_path):
@@ -230,41 +235,135 @@ def create_db(db_path):
     return conn
 
 
+# \u2500\u2500 Encoding + sanitization helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+#
+# Building the invalid-control-char stripping table once at module load is
+# ~5\u201310x faster than a per-chunk re.sub over hundreds of MB of text. XML 1.0
+# forbids all C0 controls except 0x9 (TAB), 0xA (LF), 0xD (CR), and also
+# forbids 0x7F (DEL) in practice; ET raises on any of these.
+_INVALID_XML_CHARS = (
+    tuple(range(0x00, 0x09))       # NUL..BS
+    + (0x0B, 0x0C)                 # VT, FF
+    + tuple(range(0x0E, 0x20))     # SO..US
+    + (0x7F,)                      # DEL
+)
+_INVALID_XML_TABLE = dict.fromkeys(_INVALID_XML_CHARS, None)
+
+# XML declaration at the head of a FileMaker export. Matches
+#   <?xml version="1.0" encoding="UTF-16"?>
+# or the same with single quotes / lowercase encoding name. We rewrite the
+# encoding to UTF-8 after transcoding so ET can parse the temp file.
+_XML_DECL_RE = re.compile(rb'<\?xml\s+[^?]*?\?>', re.IGNORECASE)
+
+
+def _detect_encoding(filepath):
+    """Sniff the file's encoding from BOM / null-byte pattern. Returns one of
+    ``utf-16``, ``utf-16-le``, ``utf-16-be``, ``utf-8``."""
+    with open(filepath, 'rb') as f:
+        raw = f.read(4)
+    if raw.startswith(b'\xff\xfe'):
+        return 'utf-16'  # BOM handled by decoder
+    if raw.startswith(b'\xfe\xff'):
+        return 'utf-16'
+    if raw.startswith(b'\xef\xbb\xbf'):
+        return 'utf-8-sig'
+    # No BOM \u2014 heuristic: FileMaker's default DDR is UTF-16 LE with no BOM
+    # in some FM versions. Null bytes in the first 4 bytes of an ASCII-y
+    # start indicate UTF-16.
+    if len(raw) >= 4 and (raw[1] == 0 or raw[0] == 0):
+        return 'utf-16-le' if raw[1] == 0 else 'utf-16-be'
+    return 'utf-8'
+
+
+def _stream_transcode_to_utf8(source_path, dest_path, chunk_bytes=1 << 20):
+    """Stream-transcode ``source_path`` to UTF-8 at ``dest_path``.
+
+    Reads the source in ``chunk_bytes`` chunks, incrementally decodes with
+    the sniffed encoding, strips XML-1.0-invalid control chars using
+    ``str.translate`` (much cheaper than regex over 200MB), and re-encodes
+    to UTF-8. The XML declaration is rewritten to advertise UTF-8 so
+    ``ET.iterparse`` can consume the temp file directly.
+
+    Returns the total bytes written to ``dest_path``.
+    """
+    encoding = _detect_encoding(source_path)
+    decoder = codecs.getincrementaldecoder(encoding)()
+    written = 0
+    decl_written = False
+
+    with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
+        while True:
+            chunk = src.read(chunk_bytes)
+            final = not chunk
+            text = decoder.decode(chunk, final=final)
+            if text:
+                # Strip BOM once at the very start
+                if not decl_written and text.startswith('\ufeff'):
+                    text = text[1:]
+                # Strip invalid XML 1.0 control chars
+                if text:
+                    text = text.translate(_INVALID_XML_TABLE)
+                data = text.encode('utf-8')
+                # Rewrite the XML declaration once
+                if not decl_written and data:
+                    m = _XML_DECL_RE.search(data)
+                    if m:
+                        # Replace the whole declaration with a UTF-8 one
+                        data = (
+                            data[: m.start()]
+                            + b'<?xml version="1.0" encoding="UTF-8"?>'
+                            + data[m.end() :]
+                        )
+                    decl_written = True
+                dst.write(data)
+                written += len(data)
+            if final:
+                break
+    return written
+
+
 def read_fm_xml(filepath):
-    """Read a FileMaker XML file, handling UTF-16 encoding."""
-    # Try UTF-16 first (standard FM export), fall back to UTF-8
+    """Legacy helper: read a FileMaker XML file into a Python str.
+
+    Kept for callers that still want the whole document as text (e.g.
+    debugging tools). The indexer path uses ``_stream_transcode_to_utf8``
+    instead so it never holds the full document in memory.
+    """
+    encoding = _detect_encoding(filepath)
+    # codecs.open handles both plain 'utf-16' (with BOM detection) and the
+    # LE/BE variants.
     try:
-        with open(filepath, 'rb') as f:
-            raw = f.read(4)
-        if raw[:2] in (b'\xff\xfe', b'\xfe\xff') or (len(raw) >= 4 and raw[1] == 0):
-            with codecs.open(filepath, 'r', 'utf-16') as f:
-                return f.read()
-        else:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-    except Exception:
-        with codecs.open(filepath, 'r', 'utf-16') as f:
+        with codecs.open(filepath, 'r', encoding) as f:
+            return f.read()
+    except LookupError:
+        # utf-8-sig is a valid codec name for codecs.open
+        with codecs.open(filepath, 'r', encoding) as f:
             return f.read()
 
 
 def _sanitize_xml_content(content):
     """Remove control characters that are invalid in XML 1.0.
     XML 1.0 allows: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]"""
-    import re
-    # Match control chars except tab (0x9), newline (0xA), carriage return (0xD)
-    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', content)
+    return content.translate(_INVALID_XML_TABLE)
 
 
-def parse_xml_streaming(filepath):
-    """Parse FM XML file and return the root element.
-    For very large files, we use iterparse patterns."""
+def parse_xml_dom(filepath):
+    """Legacy DOM parse: read the whole file, sanitize, ``ET.fromstring``.
+
+    Uses 5\u201315x file size in RAM. Fine on developer laptops for files up to
+    ~50MB; use the streaming path (``index_file``) for anything larger.
+    """
     content = read_fm_xml(filepath)
-    # Remove any BOM
     if content and content[0] == '\ufeff':
         content = content[1:]
-    # Strip invalid XML 1.0 control characters (common in FM exports)
     content = _sanitize_xml_content(content)
     return ET.fromstring(content)
+
+
+# Kept as an alias so external callers keep working. The name is a legacy
+# misnomer \u2014 this build path is DOM, not streaming; the streaming path lives
+# inside ``index_file``.
+parse_xml_streaming = parse_xml_dom
 
 
 def translate_step_to_human(step_elem, step_name, step_id):
@@ -705,419 +804,665 @@ def translate_step_to_human(step_elem, step_name, step_id):
     return f"{prefix}{step_name} [ ... ]"
 
 
-def index_file(xml_path, db_path):
-    """Index a FileMaker XML file into the SQLite database."""
+# ─── Per-catalog handlers ────────────────────────────────────────────────────
+#
+# Each handler takes a fully-built catalog element (as delivered by
+# ``ET.iterparse`` on its ``end`` event) plus the SQLite cursor and current
+# file_id, extracts the rows, and writes them to the DB. The caller is
+# expected to ``.clear()`` the element after the handler returns.
+#
+# The extraction logic here is intentionally a straight port of the inline
+# code that used to live in ``index_file`` — same tag names, same SQL, same
+# schema — so behaviour is unchanged, only the memory profile is.
+
+
+def _handle_fields_for_tables(fft, c, file_id):
+    """Process a FieldsForTables element (contains FieldCatalog children).
+
+    Writes to ``tables_def`` and ``fields``.
+    """
+    for fc in fft.findall('FieldCatalog'):
+        bt = fc.find('BaseTableReference')
+        if bt is None:
+            continue
+        table_name = bt.get('name', '')
+        table_id_val = int(bt.get('id', 0))
+        table_uuid = bt.get('UUID', '')
+
+        obj_list = fc.find('ObjectList')
+        field_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
+
+        c.execute(
+            "INSERT INTO tables_def (file_id, table_id, name, uuid, field_count) "
+            "VALUES (?,?,?,?,?)",
+            (file_id, table_id_val, table_name, table_uuid, field_count),
+        )
+
+        if obj_list is None:
+            continue
+        for field in obj_list.findall('Field'):
+            fid = int(field.get('id', 0))
+            fname = field.get('name', '')
+            ftype = field.get('fieldtype', '')
+            dtype = field.get('datatype', '')
+            fcomment = field.get('comment', '')
+            fuuid = ''
+            uuid_elem = field.find('UUID')
+            if uuid_elem is not None and uuid_elem.text:
+                fuuid = uuid_elem.text.strip()
+
+            is_global = 0
+            storage = field.find('Storage')
+            if storage is not None:
+                is_global = 1 if storage.get('global') == 'True' else 0
+                max_rep = int(storage.get('maxRepetitions', 1))
+            else:
+                max_rep = 1
+
+            auto_enter = ''
+            ae = field.find('AutoEnter')
+            if ae is not None:
+                auto_enter = ae.get('type', '')
+
+            validation = ''
+            val = field.find('Validation')
+            if val is not None:
+                validation = val.get('type', '')
+
+            calc_text = ''
+            calc = field.find('.//Calculation/Text')
+            if calc is not None and calc.text:
+                calc_text = calc.text.strip()
+
+            c.execute(
+                """INSERT INTO fields
+                    (file_id, table_id, table_name, field_id, name, fieldtype, datatype,
+                     comment, uuid, is_global, max_repetitions, auto_enter_type,
+                     validation_type, calculation_text)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (file_id, table_id_val, table_name, fid, fname, ftype, dtype,
+                 fcomment, fuuid, is_global, max_rep, auto_enter, validation, calc_text),
+            )
+
+
+def _handle_value_list_catalog(vlc, c, file_id):
+    """Process a ValueListCatalog element. Writes to ``value_lists``."""
+    for vl in vlc.findall('.//ValueList'):
+        vl_id = int(vl.get('id', 0))
+        vl_name = vl.get('name', '')
+        vl_uuid = ''
+        uuid_elem = vl.find('UUID')
+        if uuid_elem is not None and uuid_elem.text:
+            vl_uuid = uuid_elem.text.strip()
+        c.execute(
+            "INSERT INTO value_lists (file_id, vl_id, name, uuid) VALUES (?,?,?,?)",
+            (file_id, vl_id, vl_name, vl_uuid),
+        )
+
+
+def _handle_relationship_catalog(rc, c, file_id):
+    """Process a RelationshipCatalog element. Writes to ``relationships``."""
+    for rel in rc.findall('.//Relationship'):
+        rid = int(rel.get('id', 0))
+        ruuid = ''
+        uuid_elem = rel.find('UUID')
+        if uuid_elem is not None and uuid_elem.text:
+            ruuid = uuid_elem.text.strip()
+
+        lt = rel.find('LeftTable')
+        rt = rel.find('RightTable')
+
+        lt_name = lt_id = rt_name = rt_id = ''
+        cascade_c = cascade_d = 0
+
+        if lt is not None:
+            lto = lt.find('TableOccurrenceReference')
+            if lto is not None:
+                lt_name = lto.get('name', '')
+                lt_id = int(lto.get('id', 0))
+
+        if rt is not None:
+            rto = rt.find('TableOccurrenceReference')
+            if rto is not None:
+                rt_name = rto.get('name', '')
+                rt_id = int(rto.get('id', 0))
+            cascade_c = 1 if rt.get('cascadeCreate') == 'True' else 0
+            cascade_d = 1 if rt.get('cascadeDelete') == 'True' else 0
+
+        jp = rel.find('.//JoinPredicateList/JoinPredicate')
+        join_type = jp.get('type', '') if jp is not None else ''
+
+        lf_name = rf_name = ''
+        if jp is not None:
+            lf = jp.find('.//LeftField//FieldReference')
+            rf = jp.find('.//RightField//FieldReference')
+            if lf is not None:
+                lf_name = lf.get('name', '')
+            if rf is not None:
+                rf_name = rf.get('name', '')
+
+        c.execute(
+            """INSERT INTO relationships
+                (file_id, rel_id, uuid, left_table, left_table_id, right_table, right_table_id,
+                 join_type, left_field, right_field, cascade_create, cascade_delete)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (file_id, rid, ruuid, lt_name, lt_id, rt_name, rt_id,
+             join_type, lf_name, rf_name, cascade_c, cascade_d),
+        )
+
+
+def _handle_script_catalog(sc, c, file_id):
+    """Process a ScriptCatalog element (script metadata only, no steps).
+
+    Writes to ``scripts`` — step_count is populated later when the matching
+    StepsForScripts block is processed.
+    """
+    for script in sc.findall('Script'):
+        sid = int(script.get('id', 0))
+        sname = script.get('name', '')
+        is_folder = 1 if script.get('isFolder') else 0
+        is_sep = 1 if script.get('isSeparatorItem') else 0
+
+        suuid = ''
+        uuid_elem = script.find('UUID')
+        if uuid_elem is not None and uuid_elem.text:
+            suuid = uuid_elem.text.strip()
+
+        is_hidden = 0
+        run_full = 0
+        opts = script.find('Options')
+        if opts is not None:
+            is_hidden = 1 if opts.get('hidden') == 'True' else 0
+            run_full = 1 if opts.get('runwithfullaccess') == 'True' else 0
+
+        c.execute(
+            """INSERT INTO scripts
+                (file_id, script_id, name, uuid, is_folder, is_separator, is_hidden, run_with_full_access)
+                VALUES (?,?,?,?,?,?,?,?)""",
+            (file_id, sid, sname, suuid, is_folder, is_sep, is_hidden, run_full),
+        )
+
+
+def _handle_layout_catalog(lc, c, file_id):
+    """Process a LayoutCatalog element.
+
+    Writes to ``layouts`` and to ``script_references`` / ``field_references``
+    (for buttons / triggers / field placements on the layout).
+    """
+    for layout in lc.findall('Layout'):
+        lid = int(layout.get('id', 0))
+        lname = layout.get('name', '')
+        lwidth = int(layout.get('width', 0)) if layout.get('width') else 0
+
+        luuid = ''
+        uuid_elem = layout.find('UUID')
+        if uuid_elem is not None and uuid_elem.text:
+            luuid = uuid_elem.text.strip()
+
+        to_name = ''
+        to_id = 0
+        to_ref = layout.find('TableOccurrenceReference')
+        if to_ref is not None:
+            to_name = to_ref.get('name', '')
+            to_id = int(to_ref.get('id', 0))
+
+        c.execute(
+            """INSERT INTO layouts
+                (file_id, layout_id, name, uuid, table_occurrence, table_occurrence_id, width)
+                VALUES (?,?,?,?,?,?,?)""",
+            (file_id, lid, lname, luuid, to_name, to_id, lwidth),
+        )
+
+        # Extract script references from layout buttons / triggers
+        for sr in layout.findall('.//ScriptReference'):
+            sr_id = int(sr.get('id', 0))
+            sr_name = sr.get('name', '')
+            sr_uuid = sr.get('UUID', '')
+            c.execute(
+                """INSERT INTO script_references
+                    (file_id, source_type, source_id, source_name, target_script_id,
+                     target_script_name, target_script_uuid, context)
+                    VALUES (?,?,?,?,?,?,?,?)""",
+                (file_id, 'layout', lid, lname, sr_id, sr_name, sr_uuid, 'button/trigger'),
+            )
+
+        # Extract field references from layout
+        for fr in layout.findall('.//FieldReference'):
+            frid = int(fr.get('id', 0))
+            frname = fr.get('name', '')
+            to = fr.find('TableOccurrenceReference')
+            toname = to.get('name', '') if to is not None else ''
+            toid = int(to.get('id', 0)) if to is not None else 0
+            c.execute(
+                """INSERT INTO field_references
+                    (file_id, source_type, source_id, source_name, field_id, field_name,
+                     table_occurrence, table_occurrence_id, context)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                (file_id, 'layout', lid, lname, frid, frname, toname, toid, 'layout_field'),
+            )
+
+
+def _handle_external_data_source_catalog(edsc, c, file_id):
+    """Process an ExternalDataSourceCatalog element. Writes to ``external_data_sources``."""
+    for eds in edsc.findall('ExternalDataSource'):
+        eid = int(eds.get('id', 0))
+        ename = eds.get('name', '')
+        etype = eds.get('type', '')
+        epath = ''
+        upl = eds.find('.//UniversalPathList')
+        if upl is not None and upl.text:
+            epath = upl.text.strip()
+        c.execute(
+            "INSERT INTO external_data_sources (file_id, eds_id, name, source_type, path) "
+            "VALUES (?,?,?,?,?)",
+            (file_id, eid, ename, etype, epath),
+        )
+
+
+def _handle_custom_function_catalog(cfc, c, file_id, cf_names_out):
+    """Process a CustomFunctionCatalog (or …sCatalog) element.
+
+    Writes to ``custom_functions`` and appends ``(cf_id, cf_name)`` tuples to
+    ``cf_names_out`` so the caller can build the CF cross-reference index
+    later.
+    """
+    for cf in cfc.findall('.//CustomFunction'):
+        cfid = int(cf.get('id', 0))
+        cfname = cf.get('name', '')
+        cfuuid = ''
+        uuid_elem = cf.find('UUID')
+        if uuid_elem is not None and uuid_elem.text:
+            cfuuid = uuid_elem.text.strip()
+
+        cfdisplay = ''
+        disp_elem = cf.find('Display')
+        if disp_elem is not None and disp_elem.text:
+            cfdisplay = disp_elem.text.strip()
+
+        param_names = []
+        obj_list = cf.find('ObjectList')
+        if obj_list is not None:
+            for param in obj_list.findall('Parameter'):
+                pname = param.get('name', '')
+                if pname:
+                    param_names.append(pname)
+        cfparams = ', '.join(param_names)
+        param_count = len(param_names)
+
+        cfcalc = ''
+        calc_elem = cf.find('.//Calculation/Text')
+        if calc_elem is not None and calc_elem.text:
+            cfcalc = calc_elem.text.strip()
+
+        c.execute(
+            """INSERT INTO custom_functions
+                (file_id, cf_id, name, uuid, display, param_count, parameters, calculation_text)
+                VALUES (?,?,?,?,?,?,?,?)""",
+            (file_id, cfid, cfname, cfuuid, cfdisplay, param_count, cfparams, cfcalc),
+        )
+        cf_names_out.append((cfid, cfname))
+
+
+def _handle_script_block(script_block, c, file_id):
+    """Process one Script element inside StepsForScripts.
+
+    Writes to ``script_steps`` and appends cross-refs to
+    ``script_references`` / ``layout_references`` / ``field_references``.
+    Also updates the corresponding row in ``scripts`` with its step count.
+    """
+    sref = script_block.find('ScriptReference')
+    if sref is None:
+        return
+    sid = int(sref.get('id', 0))
+    sname = sref.get('name', '')
+
+    obj_list = script_block.find('ObjectList')
+    step_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
+
+    c.execute("UPDATE scripts SET step_count=? WHERE file_id=? AND script_id=?",
+              (step_count, file_id, sid))
+
+    if obj_list is None:
+        return
+
+    for step in obj_list.findall('Step'):
+        step_idx = int(step.get('index', 0))
+        step_type_id = int(step.get('id', 0))
+        step_name_val = step.get('name', '')
+        step_enabled = 1 if step.get('enable', 'True') == 'True' else 0
+
+        raw_xml = ET.tostring(step, encoding='unicode')
+        human = translate_step_to_human(step, step_name_val, step_type_id)
+
+        c.execute(
+            """INSERT INTO script_steps
+                (file_id, script_id, script_name, step_index, step_type_id, step_name,
+                 enabled, raw_xml, human_readable)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+            (file_id, sid, sname, step_idx, step_type_id, step_name_val,
+             step_enabled, raw_xml, human),
+        )
+
+        # Extract script references from Perform Script steps
+        for sr in step.findall('.//ScriptReference'):
+            sr_id_val = int(sr.get('id', 0))
+            sr_name_val = sr.get('name', '')
+            sr_uuid_val = sr.get('UUID', '')
+            c.execute(
+                """INSERT INTO script_references
+                    (file_id, source_type, source_id, source_name, target_script_id,
+                     target_script_name, target_script_uuid, context)
+                    VALUES (?,?,?,?,?,?,?,?)""",
+                (file_id, 'script', sid, sname, sr_id_val, sr_name_val, sr_uuid_val, 'perform_script'),
+            )
+
+        # Extract layout references from Go to Layout steps
+        for lr in step.findall('.//LayoutReference'):
+            lr_id = int(lr.get('id', 0))
+            lr_name = lr.get('name', '')
+            lr_uuid = lr.get('UUID', '')
+            c.execute(
+                """INSERT INTO layout_references
+                    (file_id, source_type, source_id, source_name, layout_id, layout_name, layout_uuid)
+                    VALUES (?,?,?,?,?,?,?)""",
+                (file_id, 'script', sid, sname, lr_id, lr_name, lr_uuid),
+            )
+
+        # Extract field references from Set Field and other steps
+        for fr in step.findall('.//FieldReference'):
+            frid = int(fr.get('id', 0))
+            frname = fr.get('name', '')
+            to = fr.find('TableOccurrenceReference')
+            toname = to.get('name', '') if to is not None else ''
+            toid = int(to.get('id', 0)) if to is not None else 0
+            c.execute(
+                """INSERT INTO field_references
+                    (file_id, source_type, source_id, source_name, field_id, field_name,
+                     table_occurrence, table_occurrence_id, context)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                (file_id, 'script', sid, sname, frid, frname, toname, toid, 'script_step'),
+            )
+
+
+def _build_cf_cross_references(c, file_id, cf_names):
+    """After all script_steps are inserted, scan them for CF references.
+
+    Runs entirely against SQLite — no XML in memory. This is the CF
+    cross-reference pass that used to sit at the end of the DOM-based
+    ``index_file`` and produces the ``cf_references`` rows.
+    """
+    if not cf_names:
+        return
+    # Sort by length descending so longer names match first
+    sorted_cfs = sorted(cf_names, key=lambda x: len(x[1]), reverse=True)
+    cf_pattern = re.compile(
+        r'\b(' + '|'.join(re.escape(name) for _, name in sorted_cfs) + r')\b'
+    )
+    cf_id_map = {name: cfid for cfid, name in cf_names}
+
+    rows = c.execute(
+        "SELECT file_id, script_id, script_name, step_index, raw_xml "
+        "FROM script_steps WHERE file_id=?",
+        (file_id,),
+    ).fetchall()
+    cf_ref_set = set()  # deduplicate (cf_name, script_id, step_index)
+    for row in rows:
+        raw = row[4] if row[4] else ''
+        for cf_match in cf_pattern.findall(raw):
+            key = (cf_match, row[1], row[3])
+            if key in cf_ref_set:
+                continue
+            cf_ref_set.add(key)
+            c.execute(
+                """INSERT INTO cf_references
+                    (file_id, cf_id, cf_name, script_id, script_name, step_index, context)
+                    VALUES (?,?,?,?,?,?,?)""",
+                (file_id, cf_id_map[cf_match], cf_match, row[1], row[2], row[3], 'calculation'),
+            )
+
+
+def index_file(xml_path, db_path, use_dom=False):
+    """Index a FileMaker XML file into the SQLite database.
+
+    Default path (``use_dom=False``): streams the XML.
+
+      1. Transcode the source in 1 MiB chunks to a UTF-8 temp file with
+         invalid XML 1.0 control chars stripped via ``str.translate``.
+      2. Walk the temp file with ``ET.iterparse`` and dispatch each
+         catalog element to its handler on the ``end`` event.
+      3. Clear each processed element so peak memory stays bounded by
+         the largest single catalog / script block, not the whole file.
+
+    ``use_dom=True`` falls back to the legacy ``parse_xml_dom`` path
+    (whole document into memory). Kept only for correctness comparison
+    against the streaming path.
+    """
     print(f"Reading {xml_path}...")
     start = time.time()
 
-    root = parse_xml_streaming(xml_path)
+    if use_dom:
+        return _index_file_dom(xml_path, db_path, start)
+    return _index_file_streaming(xml_path, db_path, start)
 
-    print(f"  Parsed XML in {time.time()-start:.1f}s")
+
+def _index_file_streaming(xml_path, db_path, start):
+    """Streaming implementation of ``index_file`` — see its docstring."""
+    conn = create_db(db_path)
+    c = conn.cursor()
+    file_id = None
+    cf_names = []
+
+    # Which tag ends we dispatch on — order matters only when tags could
+    # nest (e.g. Script appears both directly under ScriptCatalog and
+    # inside StepsForScripts/Script; that ambiguity is resolved with a
+    # state flag below).
+    _catalog_dispatch = {
+        'FieldsForTables':           _handle_fields_for_tables,
+        'ValueListCatalog':          _handle_value_list_catalog,
+        'RelationshipCatalog':       _handle_relationship_catalog,
+        'ScriptCatalog':             _handle_script_catalog,
+        'LayoutCatalog':             _handle_layout_catalog,
+        'ExternalDataSourceCatalog': _handle_external_data_source_catalog,
+    }
+    # CustomFunctionCatalog and its plural variant use the same handler.
+    _cf_tags = {'CustomFunctionCatalog', 'CustomFunctionsCatalog'}
+
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix='fm_ddr_', suffix='.xml')
+    os.close(tmp_fd)
+    try:
+        t_transcode = time.time()
+        written = _stream_transcode_to_utf8(xml_path, tmp_path)
+        print(f"  Transcoded {written / (1024 * 1024):.1f} MB to UTF-8 in "
+              f"{time.time() - t_transcode:.1f}s")
+
+        # State machine:
+        #   - in_add_action: we only extract catalogs under the top-level
+        #     <AddAction>, mirroring the DOM path's behaviour. FM DDRs
+        #     that describe a diff (as opposed to a full "Save As XML"
+        #     dump) can also contain <ModifyAction> and <DeleteAction>
+        #     with their own catalog children — those must be ignored
+        #     for indexing so counts match the DOM parser.
+        #   - in_steps_for_scripts: needed only to disambiguate the
+        #     Script tag, which appears both under ScriptCatalog (as
+        #     metadata) and under StepsForScripts (as a script's step
+        #     list). We only process the latter on Script end events.
+        in_add_action = False
+        in_steps_for_scripts = False
+
+        t_parse = time.time()
+        for event, elem in ET.iterparse(tmp_path, events=('start', 'end')):
+            tag = elem.tag
+
+            if event == 'start':
+                if file_id is None and tag == 'FMSaveAsXML':
+                    fm_file = elem.get('File', os.path.basename(xml_path))
+                    fm_uuid = elem.get('UUID', '')
+                    fm_version = elem.get('Source', '')
+                    fm_locale = elem.get('locale', '')
+                    c.execute(
+                        "INSERT INTO files (filename, filepath, uuid, fm_version, "
+                        "locale, indexed_at) VALUES (?,?,?,?,?,datetime('now'))",
+                        (fm_file, xml_path, fm_uuid, fm_version, fm_locale),
+                    )
+                    file_id = c.lastrowid
+                elif tag == 'AddAction':
+                    in_add_action = True
+                elif tag == 'StepsForScripts' and in_add_action:
+                    in_steps_for_scripts = True
+                continue
+
+            # event == 'end'
+            if not in_add_action:
+                # Still let the AddAction itself close normally below.
+                if tag == 'AddAction':
+                    in_add_action = False  # nothing to do; wasn't set
+                    elem.clear()
+                continue
+
+            handler = _catalog_dispatch.get(tag)
+            if handler is not None:
+                handler(elem, c, file_id)
+                elem.clear()
+            elif tag in _cf_tags:
+                _handle_custom_function_catalog(elem, c, file_id, cf_names)
+                elem.clear()
+            elif tag == 'Script' and in_steps_for_scripts:
+                # One script's worth of steps — this is the memory-critical
+                # inner container. Process and clear before moving on.
+                _handle_script_block(elem, c, file_id)
+                elem.clear()
+            elif tag == 'StepsForScripts':
+                in_steps_for_scripts = False
+                elem.clear()
+            elif tag == 'AddAction':
+                in_add_action = False
+                elem.clear()
+
+        print(f"  Streamed + indexed in {time.time() - t_parse:.1f}s")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if file_id is None:
+        print("ERROR: No <FMSaveAsXML> root element found")
+        conn.close()
+        return None
+
+    t_cf = time.time()
+    _build_cf_cross_references(c, file_id, cf_names)
+    print(f"  Built CF cross-references in {time.time() - t_cf:.1f}s")
+
+    _print_summary_and_close(conn, c, file_id, xml_path, db_path, start)
+    return db_path
+
+
+def _index_file_dom(xml_path, db_path, start):
+    """Legacy DOM-based indexing path. Retained for correctness comparison.
+
+    Uses ``parse_xml_dom`` (full file into memory + full ET tree). Do not
+    call directly for anything larger than ~50MB on a RAM-constrained
+    machine — that is exactly the case the streaming path was written for.
+    """
+    root = parse_xml_dom(xml_path)
+    print(f"  Parsed XML in {time.time()-start:.1f}s (DOM path)")
 
     conn = create_db(db_path)
     c = conn.cursor()
 
-    # File info
     fm_file = root.get('File', os.path.basename(xml_path))
     fm_uuid = root.get('UUID', '')
     fm_version = root.get('Source', '')
     fm_locale = root.get('locale', '')
 
-    c.execute("INSERT INTO files (filename, filepath, uuid, fm_version, locale, indexed_at) VALUES (?,?,?,?,?,datetime('now'))",
-              (fm_file, xml_path, fm_uuid, fm_version, fm_locale))
+    c.execute(
+        "INSERT INTO files (filename, filepath, uuid, fm_version, locale, indexed_at) "
+        "VALUES (?,?,?,?,?,datetime('now'))",
+        (fm_file, xml_path, fm_uuid, fm_version, fm_locale),
+    )
     file_id = c.lastrowid
 
     structure = root.find('Structure')
     if structure is None:
         print("ERROR: No <Structure> element found")
         conn.close()
-        return
+        return None
 
-    # Process all AddAction sections
+    cf_names = []
     for add_action in structure.findall('AddAction'):
-        # --- Tables and Fields ---
         for fft in add_action.findall('.//FieldsForTables'):
-            for fc in fft.findall('FieldCatalog'):
-                bt = fc.find('BaseTableReference')
-                if bt is None:
-                    continue
-                table_name = bt.get('name', '')
-                table_id_val = int(bt.get('id', 0))
-                table_uuid = bt.get('UUID', '')
-
-                obj_list = fc.find('ObjectList')
-                field_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
-
-                c.execute("INSERT INTO tables_def (file_id, table_id, name, uuid, field_count) VALUES (?,?,?,?,?)",
-                          (file_id, table_id_val, table_name, table_uuid, field_count))
-
-                if obj_list is not None:
-                    for field in obj_list.findall('Field'):
-                        fid = int(field.get('id', 0))
-                        fname = field.get('name', '')
-                        ftype = field.get('fieldtype', '')
-                        dtype = field.get('datatype', '')
-                        fcomment = field.get('comment', '')
-                        fuuid = ''
-                        uuid_elem = field.find('UUID')
-                        if uuid_elem is not None and uuid_elem.text:
-                            fuuid = uuid_elem.text.strip()
-
-                        is_global = 0
-                        storage = field.find('Storage')
-                        if storage is not None:
-                            is_global = 1 if storage.get('global') == 'True' else 0
-                            max_rep = int(storage.get('maxRepetitions', 1))
-                        else:
-                            max_rep = 1
-
-                        auto_enter = ''
-                        ae = field.find('AutoEnter')
-                        if ae is not None:
-                            auto_enter = ae.get('type', '')
-
-                        validation = ''
-                        val = field.find('Validation')
-                        if val is not None:
-                            validation = val.get('type', '')
-
-                        calc_text = ''
-                        calc = field.find('.//Calculation/Text')
-                        if calc is not None and calc.text:
-                            calc_text = calc.text.strip()
-
-                        c.execute("""INSERT INTO fields
-                            (file_id, table_id, table_name, field_id, name, fieldtype, datatype,
-                             comment, uuid, is_global, max_repetitions, auto_enter_type,
-                             validation_type, calculation_text)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (file_id, table_id_val, table_name, fid, fname, ftype, dtype,
-                             fcomment, fuuid, is_global, max_rep, auto_enter, validation, calc_text))
-
-        # --- Value Lists ---
+            _handle_fields_for_tables(fft, c, file_id)
         for vlc in add_action.findall('.//ValueListCatalog'):
-            for vl in vlc.findall('.//ValueList'):
-                vl_id = int(vl.get('id', 0))
-                vl_name = vl.get('name', '')
-                vl_uuid = ''
-                uuid_elem = vl.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    vl_uuid = uuid_elem.text.strip()
-                c.execute("INSERT INTO value_lists (file_id, vl_id, name, uuid) VALUES (?,?,?,?)",
-                          (file_id, vl_id, vl_name, vl_uuid))
-
-        # --- Relationships ---
+            _handle_value_list_catalog(vlc, c, file_id)
         for rc in add_action.findall('.//RelationshipCatalog'):
-            for rel in rc.findall('.//Relationship'):
-                rid = int(rel.get('id', 0))
-                ruuid = ''
-                uuid_elem = rel.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    ruuid = uuid_elem.text.strip()
-
-                lt = rel.find('LeftTable')
-                rt = rel.find('RightTable')
-
-                lt_name = lt_id = rt_name = rt_id = ''
-                cascade_c = cascade_d = 0
-
-                if lt is not None:
-                    lto = lt.find('TableOccurrenceReference')
-                    if lto is not None:
-                        lt_name = lto.get('name', '')
-                        lt_id = int(lto.get('id', 0))
-
-                if rt is not None:
-                    rto = rt.find('TableOccurrenceReference')
-                    if rto is not None:
-                        rt_name = rto.get('name', '')
-                        rt_id = int(rto.get('id', 0))
-                    cascade_c = 1 if rt.get('cascadeCreate') == 'True' else 0
-                    cascade_d = 1 if rt.get('cascadeDelete') == 'True' else 0
-
-                jp = rel.find('.//JoinPredicateList/JoinPredicate')
-                join_type = jp.get('type', '') if jp is not None else ''
-
-                lf_name = rf_name = ''
-                if jp is not None:
-                    lf = jp.find('.//LeftField//FieldReference')
-                    rf = jp.find('.//RightField//FieldReference')
-                    if lf is not None:
-                        lf_name = lf.get('name', '')
-                    if rf is not None:
-                        rf_name = rf.get('name', '')
-
-                c.execute("""INSERT INTO relationships
-                    (file_id, rel_id, uuid, left_table, left_table_id, right_table, right_table_id,
-                     join_type, left_field, right_field, cascade_create, cascade_delete)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (file_id, rid, ruuid, lt_name, lt_id, rt_name, rt_id,
-                     join_type, lf_name, rf_name, cascade_c, cascade_d))
-
-        # --- Scripts (catalog) ---
+            _handle_relationship_catalog(rc, c, file_id)
         for sc in add_action.findall('.//ScriptCatalog'):
-            for script in sc.findall('Script'):
-                sid = int(script.get('id', 0))
-                sname = script.get('name', '')
-                is_folder = 1 if script.get('isFolder') else 0
-                is_sep = 1 if script.get('isSeparatorItem') else 0
-
-                suuid = ''
-                uuid_elem = script.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    suuid = uuid_elem.text.strip()
-
-                is_hidden = 0
-                run_full = 0
-                opts = script.find('Options')
-                if opts is not None:
-                    is_hidden = 1 if opts.get('hidden') == 'True' else 0
-                    run_full = 1 if opts.get('runwithfullaccess') == 'True' else 0
-
-                c.execute("""INSERT INTO scripts
-                    (file_id, script_id, name, uuid, is_folder, is_separator, is_hidden, run_with_full_access)
-                    VALUES (?,?,?,?,?,?,?,?)""",
-                    (file_id, sid, sname, suuid, is_folder, is_sep, is_hidden, run_full))
-
-        # --- Layouts ---
+            _handle_script_catalog(sc, c, file_id)
         for lc in add_action.findall('.//LayoutCatalog'):
-            for layout in lc.findall('Layout'):
-                lid = int(layout.get('id', 0))
-                lname = layout.get('name', '')
-                lwidth = int(layout.get('width', 0)) if layout.get('width') else 0
-
-                luuid = ''
-                uuid_elem = layout.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    luuid = uuid_elem.text.strip()
-
-                to_name = ''
-                to_id = 0
-                to_ref = layout.find('TableOccurrenceReference')
-                if to_ref is not None:
-                    to_name = to_ref.get('name', '')
-                    to_id = int(to_ref.get('id', 0))
-
-                c.execute("""INSERT INTO layouts
-                    (file_id, layout_id, name, uuid, table_occurrence, table_occurrence_id, width)
-                    VALUES (?,?,?,?,?,?,?)""",
-                    (file_id, lid, lname, luuid, to_name, to_id, lwidth))
-
-                # Extract script references from layout buttons
-                for sr in layout.findall('.//ScriptReference'):
-                    sr_id = int(sr.get('id', 0))
-                    sr_name = sr.get('name', '')
-                    sr_uuid = sr.get('UUID', '')
-                    c.execute("""INSERT INTO script_references
-                        (file_id, source_type, source_id, source_name, target_script_id,
-                         target_script_name, target_script_uuid, context)
-                        VALUES (?,?,?,?,?,?,?,?)""",
-                        (file_id, 'layout', lid, lname, sr_id, sr_name, sr_uuid, 'button/trigger'))
-
-                # Extract field references from layout
-                for fr in layout.findall('.//FieldReference'):
-                    frid = int(fr.get('id', 0))
-                    frname = fr.get('name', '')
-                    to = fr.find('TableOccurrenceReference')
-                    toname = to.get('name', '') if to is not None else ''
-                    toid = int(to.get('id', 0)) if to is not None else 0
-                    c.execute("""INSERT INTO field_references
-                        (file_id, source_type, source_id, source_name, field_id, field_name,
-                         table_occurrence, table_occurrence_id, context)
-                        VALUES (?,?,?,?,?,?,?,?,?)""",
-                        (file_id, 'layout', lid, lname, frid, frname, toname, toid, 'layout_field'))
-
-        # --- External Data Sources ---
+            _handle_layout_catalog(lc, c, file_id)
         for edsc in add_action.findall('.//ExternalDataSourceCatalog'):
-            for eds in edsc.findall('ExternalDataSource'):
-                eid = int(eds.get('id', 0))
-                ename = eds.get('name', '')
-                etype = eds.get('type', '')
-                epath = ''
-                upl = eds.find('.//UniversalPathList')
-                if upl is not None and upl.text:
-                    epath = upl.text.strip()
-                c.execute("INSERT INTO external_data_sources (file_id, eds_id, name, source_type, path) VALUES (?,?,?,?,?)",
-                          (file_id, eid, ename, etype, epath))
-
-        # --- Custom Functions ---
-        cf_names = []  # collect for cross-referencing in script steps
-        # FM exports use either CustomFunctionCatalog or CustomFunctionsCatalog
+            _handle_external_data_source_catalog(edsc, c, file_id)
         cf_catalogs = add_action.findall('.//CustomFunctionCatalog')
         if not cf_catalogs:
             cf_catalogs = add_action.findall('.//CustomFunctionsCatalog')
         for cfc in cf_catalogs:
-            for cf in cfc.findall('.//CustomFunction'):
-                cfid = int(cf.get('id', 0))
-                cfname = cf.get('name', '')
-                cfuuid = ''
-                uuid_elem = cf.find('UUID')
-                if uuid_elem is not None and uuid_elem.text:
-                    cfuuid = uuid_elem.text.strip()
-                # Display signature (e.g., "DeclareVariables ( ParameterString )")
-                cfdisplay = ''
-                disp_elem = cf.find('Display')
-                if disp_elem is not None and disp_elem.text:
-                    cfdisplay = disp_elem.text.strip()
-                # Parameters from ObjectList
-                param_names = []
-                obj_list = cf.find('ObjectList')
-                if obj_list is not None:
-                    for param in obj_list.findall('Parameter'):
-                        pname = param.get('name', '')
-                        if pname:
-                            param_names.append(pname)
-                cfparams = ', '.join(param_names)
-                param_count = len(param_names)
-                # Calculation text (DDR may not include this)
-                cfcalc = ''
-                calc_elem = cf.find('.//Calculation/Text')
-                if calc_elem is not None and calc_elem.text:
-                    cfcalc = calc_elem.text.strip()
-                c.execute("""INSERT INTO custom_functions
-                    (file_id, cf_id, name, uuid, display, param_count, parameters, calculation_text)
-                    VALUES (?,?,?,?,?,?,?,?)""",
-                    (file_id, cfid, cfname, cfuuid, cfdisplay, param_count, cfparams, cfcalc))
-                cf_names.append((cfid, cfname))
-
-        # --- Script Steps ---
+            _handle_custom_function_catalog(cfc, c, file_id, cf_names)
         for sfs in add_action.findall('.//StepsForScripts'):
             for script_block in sfs.findall('Script'):
-                sref = script_block.find('ScriptReference')
-                if sref is None:
-                    continue
-                sid = int(sref.get('id', 0))
-                sname = sref.get('name', '')
+                _handle_script_block(script_block, c, file_id)
 
-                obj_list = script_block.find('ObjectList')
-                step_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
+    _build_cf_cross_references(c, file_id, cf_names)
+    _print_summary_and_close(conn, c, file_id, xml_path, db_path, start)
+    return db_path
 
-                # Update script record with step count
-                c.execute("UPDATE scripts SET step_count=? WHERE file_id=? AND script_id=?",
-                          (step_count, file_id, sid))
 
-                if obj_list is None:
-                    continue
-
-                for step in obj_list.findall('Step'):
-                    step_idx = int(step.get('index', 0))
-                    step_type_id = int(step.get('id', 0))
-                    step_name_val = step.get('name', '')
-                    step_enabled = 1 if step.get('enable', 'True') == 'True' else 0
-
-                    # Store raw XML
-                    raw_xml = ET.tostring(step, encoding='unicode')
-
-                    # Generate human-readable translation
-                    human = translate_step_to_human(step, step_name_val, step_type_id)
-
-                    c.execute("""INSERT INTO script_steps
-                        (file_id, script_id, script_name, step_index, step_type_id, step_name,
-                         enabled, raw_xml, human_readable)
-                        VALUES (?,?,?,?,?,?,?,?,?)""",
-                        (file_id, sid, sname, step_idx, step_type_id, step_name_val,
-                         step_enabled, raw_xml, human))
-
-                    # Extract script references from Perform Script steps
-                    for sr in step.findall('.//ScriptReference'):
-                        sr_id_val = int(sr.get('id', 0))
-                        sr_name_val = sr.get('name', '')
-                        sr_uuid_val = sr.get('UUID', '')
-                        c.execute("""INSERT INTO script_references
-                            (file_id, source_type, source_id, source_name, target_script_id,
-                             target_script_name, target_script_uuid, context)
-                            VALUES (?,?,?,?,?,?,?,?)""",
-                            (file_id, 'script', sid, sname, sr_id_val, sr_name_val, sr_uuid_val, 'perform_script'))
-
-                    # Extract layout references from Go to Layout steps
-                    for lr in step.findall('.//LayoutReference'):
-                        lr_id = int(lr.get('id', 0))
-                        lr_name = lr.get('name', '')
-                        lr_uuid = lr.get('UUID', '')
-                        c.execute("""INSERT INTO layout_references
-                            (file_id, source_type, source_id, source_name, layout_id, layout_name, layout_uuid)
-                            VALUES (?,?,?,?,?,?,?)""",
-                            (file_id, 'script', sid, sname, lr_id, lr_name, lr_uuid))
-
-                    # Extract field references from Set Field and other steps
-                    for fr in step.findall('.//FieldReference'):
-                        frid = int(fr.get('id', 0))
-                        frname = fr.get('name', '')
-                        to = fr.find('TableOccurrenceReference')
-                        toname = to.get('name', '') if to is not None else ''
-                        toid = int(to.get('id', 0)) if to is not None else 0
-                        c.execute("""INSERT INTO field_references
-                            (file_id, source_type, source_id, source_name, field_id, field_name,
-                             table_occurrence, table_occurrence_id, context)
-                            VALUES (?,?,?,?,?,?,?,?,?)""",
-                            (file_id, 'script', sid, sname, frid, frname, toname, toid, 'script_step'))
-
-    # --- Cross-reference custom functions in script steps ---
-    if cf_names:
-        import re as _re
-        # Build a regex pattern matching any CF name as a word boundary
-        # Sort by length descending so longer names match first
-        sorted_cfs = sorted(cf_names, key=lambda x: len(x[1]), reverse=True)
-        cf_pattern = _re.compile(
-            r'\b(' + '|'.join(_re.escape(name) for _, name in sorted_cfs) + r')\b'
-        )
-        cf_id_map = {name: cfid for cfid, name in cf_names}
-
-        # Scan all script step calculations for CF references
-        rows = c.execute("""SELECT file_id, script_id, script_name, step_index, raw_xml
-                           FROM script_steps WHERE file_id=?""", (file_id,)).fetchall()
-        cf_ref_set = set()  # deduplicate (cf_name, script_id, step_index)
-        for row in rows:
-            raw = row[4] if row[4] else ''
-            # Extract text inside <Calculation><Text>...</Text></Calculation> and other text nodes
-            matches = cf_pattern.findall(raw)
-            for cf_match in matches:
-                key = (cf_match, row[1], row[3])
-                if key not in cf_ref_set:
-                    cf_ref_set.add(key)
-                    # Extract a snippet of context (the human-readable step would be ideal)
-                    c.execute("""INSERT INTO cf_references
-                        (file_id, cf_id, cf_name, script_id, script_name, step_index, context)
-                        VALUES (?,?,?,?,?,?,?)""",
-                        (file_id, cf_id_map[cf_match], cf_match, row[1], row[2], row[3], 'calculation'))
-
+def _print_summary_and_close(conn, c, file_id, xml_path, db_path, start):
+    """Shared finalize path — commit, print counts + peak RSS, close conn."""
     conn.commit()
 
-    # Print summary
-    c.execute("SELECT COUNT(*) FROM custom_functions WHERE file_id=?", (file_id,))
-    cf_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM cf_references WHERE file_id=?", (file_id,))
-    cf_ref_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM tables_def WHERE file_id=?", (file_id,))
-    table_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM fields WHERE file_id=?", (file_id,))
-    field_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM scripts WHERE file_id=?", (file_id,))
-    script_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM script_steps WHERE file_id=?", (file_id,))
-    step_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM layouts WHERE file_id=?", (file_id,))
-    layout_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM relationships WHERE file_id=?", (file_id,))
-    rel_count = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM script_references WHERE file_id=?", (file_id,))
-    ref_count = c.fetchone()[0]
+    c.execute("SELECT filename FROM files WHERE rowid=?", (file_id,))
+    fm_file = c.fetchone()[0]
+
+    counts = {}
+    for label, sql in (
+        ('tables',        "SELECT COUNT(*) FROM tables_def WHERE file_id=?"),
+        ('fields',        "SELECT COUNT(*) FROM fields WHERE file_id=?"),
+        ('scripts',       "SELECT COUNT(*) FROM scripts WHERE file_id=?"),
+        ('steps',         "SELECT COUNT(*) FROM script_steps WHERE file_id=?"),
+        ('layouts',       "SELECT COUNT(*) FROM layouts WHERE file_id=?"),
+        ('relationships', "SELECT COUNT(*) FROM relationships WHERE file_id=?"),
+        ('refs',          "SELECT COUNT(*) FROM script_references WHERE file_id=?"),
+        ('cf_count',      "SELECT COUNT(*) FROM custom_functions WHERE file_id=?"),
+        ('cf_ref_count',  "SELECT COUNT(*) FROM cf_references WHERE file_id=?"),
+    ):
+        c.execute(sql, (file_id,))
+        counts[label] = c.fetchone()[0]
 
     elapsed = time.time() - start
     print(f"\nIndexed {fm_file} in {elapsed:.1f}s:")
-    print(f"  Tables:        {table_count}")
-    print(f"  Fields:        {field_count}")
-    print(f"  Scripts:       {script_count}")
-    print(f"  Script Steps:  {step_count}")
-    print(f"  Layouts:       {layout_count}")
-    print(f"  Relationships: {rel_count}")
-    print(f"  Cross-refs:    {ref_count}")
-    print(f"  Custom Funcs:  {cf_count}")
-    print(f"  CF References: {cf_ref_count}")
+    print(f"  Tables:        {counts['tables']}")
+    print(f"  Fields:        {counts['fields']}")
+    print(f"  Scripts:       {counts['scripts']}")
+    print(f"  Script Steps:  {counts['steps']}")
+    print(f"  Layouts:       {counts['layouts']}")
+    print(f"  Relationships: {counts['relationships']}")
+    print(f"  Cross-refs:    {counts['refs']}")
+    print(f"  Custom Funcs:  {counts['cf_count']}")
+    print(f"  CF References: {counts['cf_ref_count']}")
+
+    # Peak RSS. macOS reports bytes, Linux reports KiB — normalize to MB.
+    if resource is not None:
+        ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == 'darwin':
+            peak_mb = ru / (1024 * 1024)
+        else:
+            peak_mb = ru / 1024
+        print(f"  Peak RSS:      {peak_mb:.0f} MB")
+
     print(f"\nDatabase saved to: {db_path}")
 
     conn.close()
-    return db_path
 
 
 def show_info(db_path):
