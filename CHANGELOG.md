@@ -4,6 +4,45 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-07-17
+
+### Changed
+- **Large-file policy in `/fm-setup` — native Terminal is now the only allowed path.**
+  Step 0 of `commands/fm-setup.md` was rewritten to remove the cloud-run
+  escape hatch entirely. Previously the doc offered Claude two options for
+  large DDRs (gzip-and-transfer to a cloud sandbox, or native Terminal on
+  the user's machine). Cloud runs are no longer permitted for large files
+  under any circumstance, so Claude will no longer offer or suggest that
+  path.
+- **New trigger condition.** The old "> 50 MB AND RAM < 4× file size"
+  heuristic is replaced by a hard rule: if the XML file is **> 50 MB**
+  OR the current session is a cloud / Cowork sandbox and the file lives on
+  the user's device, the indexer runs on the user's machine via native
+  Terminal `python3`. Available RAM is intentionally excluded — a big
+  cloud sandbox with plenty of RAM is still not allowed to index the file
+  because the file must not move.
+- **Explicit guardrail added.** Step 0 now carries a hard-rule line:
+  *"NEVER stage, upload, gzip-and-transfer, or otherwise move a large DDR
+  XML into a cloud sandbox to index it. NEVER run the indexer over the
+  device bridge. Large DDRs stay on the user's machine and are indexed by
+  native Terminal `python3`, producing the `solutions/` index in the
+  user's local project folder."*
+- Native-run flow is unchanged: commit `scripts/` to a connected folder if
+  needed, hand the user the paste-ready `python3 fm_manage.py index …
+  && … query <name> summary` command, wait for confirmation, then verify
+  the resulting `.fm_db_cache/<name>.db` and summary counts over the
+  connected folder.
+
+### Motivation
+- Cloud-run indexing of a device-resident DDR requires moving the file
+  across the sandbox bridge, which is slow, error-prone, and exposes the
+  full DDR (schema, script logic, client-identifiable strings) to the
+  cloud runtime. Native Terminal `python3` on the user's own machine
+  avoids all three.
+- The streaming indexer landed in 0.3.0 already makes in-sandbox indexing
+  of moderately-large DDRs safe on RAM; this change tightens the
+  policy for anything meaningfully large, independent of RAM.
+
 ## [0.3.0] — 2026-07-16
 
 ### Fixed
@@ -259,6 +298,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.1]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.4

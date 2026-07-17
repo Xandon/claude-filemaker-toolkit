@@ -4,27 +4,32 @@ description: Index a new FileMaker DDR XML export into the current project
 
 The user wants to add a new FileMaker solution to the current project. Follow these steps:
 
-0. **Check the environment before you start indexing.** The streaming indexer in v0.3.0+ handles multi-hundred-MB DDRs in well under 500 MB of RAM, so most exports are safe to index anywhere. But if the user is on an older version (see `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` → `version`) OR the sandbox is unusually constrained, a very large file can still thrash. Before running the indexer, size up the file and the environment:
+0. **Check the file size before you start indexing.** The streaming indexer in v0.3.0+ keeps peak RSS bounded by the largest single catalog, so most DDRs are safe to index in-sandbox. Very large DDRs are the exception. Before running the indexer, size up the file:
 
    ```bash
-   ls -la "<path/to/file.xml>"                   # bytes
-   free -m 2>/dev/null || vm_stat | head         # available RAM
+   ls -la "<path/to/file.xml>"    # bytes
    ```
 
-   If the XML file is **> 50 MB** AND available RAM is **less than 4× the file size**, don't grind through it in-sandbox. Offer the user one of these escape hatches:
+   **Hard rule — no exceptions.** If the XML file is **> 50 MB** — OR the current session is a cloud / Cowork sandbox and the file lives on the user's device — the indexer runs **on the user's machine via native Terminal `python3`.** Full stop.
 
-   - **Cloud session.** If the file lives on their device, ask them to `gzip` it there first (DDR XML compresses 10–20×), stage the `.xml.gz` in a Cowork-connected cloud folder, and re-run `/fm-setup` from a cloud session. The larger cloud sandbox usually has enough RAM to index the file in place.
-   - **Native run** (works everywhere). The plugin's `scripts/` directory is pure standard-library Python — no `pip install` needed. Copy `scripts/` into a folder the user can reach from Terminal (in Cowork: commit it to a connected folder), then hand them this paste-ready command:
+   > **NEVER stage, upload, gzip-and-transfer, or otherwise move a large DDR XML into a cloud sandbox to index it. NEVER run the indexer over the device bridge. Large DDRs stay on the user's machine and are indexed by native Terminal `python3`, producing the `solutions/` index in the user's local project folder.**
 
-     ```bash
-     cd "<folder containing the XML>" \
-       && python3 "<path>/scripts/fm_manage.py" index "<file>.xml" \
-       && python3 "<path>/scripts/fm_manage.py" query "<name>" summary
-     ```
+   Available RAM is irrelevant to this decision. A cloud sandbox with plenty of RAM is still not allowed to index a large DDR — the file is not to be moved.
 
-     Once they confirm it finished, verify the resulting `solutions/` index (check `.fm_db_cache/<name>.db` exists, then run `fm_manage.py query <name> summary` yourself) and report the counts back.
+   Native-run flow (the only allowed path for large files):
 
-   If the file is small or RAM is plentiful, skip to step 1 and proceed normally.
+   1. The plugin's `scripts/` directory is pure standard-library Python — no `pip install`, no third-party dependencies. Copy `scripts/` into a folder the user can reach from Terminal on their own machine. In Cowork specifically, commit it to a connected folder that the user can navigate to locally.
+   2. Hand the user this paste-ready command:
+
+      ```bash
+      cd "<folder containing the XML>" \
+        && python3 "<path>/scripts/fm_manage.py" index "<file>.xml" \
+        && python3 "<path>/scripts/fm_manage.py" query "<name>" summary
+      ```
+
+   3. Wait for the user to confirm it finished. Then verify the resulting index over the connected folder (check `.fm_db_cache/<name>.db` exists, run `fm_manage.py query <name> summary` yourself against that DB) and report the counts back.
+
+   If the file is **≤ 50 MB** AND this is not a cloud/Cowork sandbox with a device-resident file, proceed to step 1 and index in place.
 
 1. **Find the XML file.** Ask the user for the path to the DDR XML export if it wasn't provided. The file is typically UTF-16 encoded and starts with `<?xml version="1.0" encoding="UTF-16"?><FMSaveAsXML>`.
 
