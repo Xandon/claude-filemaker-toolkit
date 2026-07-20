@@ -18,16 +18,30 @@ The user wants to add a new FileMaker solution to the current project. Follow th
 
    Native-run flow (the only allowed path for large files):
 
-   1. The plugin's `scripts/` directory is pure standard-library Python — no `pip install`, no third-party dependencies. Copy `scripts/` into a folder the user can reach from Terminal on their own machine. In Cowork specifically, commit it to a connected folder that the user can navigate to locally.
+   **Preferred: single-file wrapper.** The plugin ships a shell wrapper at `scripts/fm_index_wrapper.sh` that locates the plugin's `fm_manage.py` in the user's installed plugin and runs `index` + `query summary` from the current directory. **Only one file lands in the user's project folder — no Python files need to be copied.**
+
+   1. Copy just `${CLAUDE_PLUGIN_ROOT}/scripts/fm_index_wrapper.sh` into the folder that contains the XML file (a connected Cowork folder that the user can navigate to locally). Make sure it's executable: the file ships with mode 0755 and should retain it, but if the copy strips permissions run `chmod +x fm_index_wrapper.sh`.
    2. Hand the user this paste-ready command:
 
       ```bash
       cd "<folder containing the XML>" \
-        && python3 "<path>/scripts/fm_manage.py" index "<file>.xml" \
-        && python3 "<path>/scripts/fm_manage.py" query "<name>" summary
+        && ./fm_index_wrapper.sh "<file>.xml"
       ```
 
+      Optional: append `--name <solution-name>` to override the default (file basename minus `.xml`).
+
    3. Wait for the user to confirm it finished. Then verify the resulting index over the connected folder (check `.fm_db_cache/<name>.db` exists, run `fm_manage.py query <name> summary` yourself against that DB) and report the counts back.
+
+   **Fallback (only if the wrapper can't find the plugin):** if the user runs the wrapper and it errors with "Could not locate fm_manage.py", they either don't have the plugin installed or it lives in a non-standard location. Two options in that case:
+
+   - Ask the user to install / reinstall the plugin in Cowork (Customize → Personal plugins), then retry the wrapper.
+   - Or copy the plugin's full `scripts/` directory into the same connected folder and either export `FM_MANAGE_PATH=<abs path>/scripts/fm_manage.py` before running the wrapper, OR bypass the wrapper entirely with:
+
+     ```bash
+     cd "<folder containing the XML>" \
+       && python3 "<path>/scripts/fm_manage.py" index "<file>.xml" \
+       && python3 "<path>/scripts/fm_manage.py" query "<name>" summary
+     ```
 
    If the file is **≤ 50 MB** AND this is not a cloud/Cowork sandbox with a device-resident file, proceed to step 1 and index in place.
 

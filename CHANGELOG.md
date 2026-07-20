@@ -4,6 +4,39 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-07-19
+
+### Added
+- **`scripts/fm_index_wrapper.sh`** — a single-file bash wrapper that
+  finds the installed plugin's `fm_manage.py` and runs `index` +
+  `query summary` from the current directory. When the native-Terminal
+  path is required for a large DDR, this is the ONE file that lands in
+  the user's project folder — no Python files need to be copied.
+
+  Auto-detection order:
+    1. `$FM_MANAGE_PATH` (explicit override)
+    2. `~/Library/Application Support/Claude/local-agent-mode-sessions/*/*/rpm/plugin_*/scripts/fm_manage.py`
+    3. `~/Library/Application Support/Claude/plugins/*/scripts/fm_manage.py`
+    4. `~/.filemaker-toolkit/scripts/fm_manage.py`
+
+  Each candidate is grep-verified as filemaker-toolkit before being
+  used, so a same-named script from another plugin can't be picked up
+  accidentally. `$FM_PYTHON` overrides the interpreter (default
+  `python3`). `$FM_PROJECT_DIR` overrides where `solutions/` and
+  `.fm_db_cache/` land (default: current working directory). `--name`
+  argument overrides the solution name (default: XML basename).
+
+### Changed
+- **`commands/fm-setup.md` step 0 rewritten** to prefer the wrapper
+  over copying the full `scripts/` directory. Claude now copies just
+  the one `.sh` file into the user's connected folder and hands them
+  `./fm_index_wrapper.sh "<file>.xml"`. The full `scripts/` copy path
+  stays as a documented fallback for the case where the wrapper can't
+  find the plugin (e.g. non-standard install location) — with an
+  `FM_MANAGE_PATH` escape hatch called out explicitly.
+- No plugin runtime changes. The wrapper is a shell script only; the
+  plugin still runs with pure standard-library Python.
+
 ## [0.3.1] — 2026-07-17
 
 ### Changed
@@ -298,6 +331,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.2]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.2.5
