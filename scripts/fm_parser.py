@@ -819,28 +819,42 @@ def translate_step_to_human(step_elem, step_name, step_id):
 def _handle_fields_for_tables(fft, c, file_id):
     """Process a FieldsForTables element (contains FieldCatalog children).
 
-    Writes to ``tables_def`` and ``fields``.
+    Writes to ``tables_def`` and ``fields``. This function stays for the
+    DOM-based fallback path; the streaming path dispatches on individual
+    FieldCatalog end events via ``_handle_single_field_catalog`` instead,
+    so it can clear each table's fields as they're written and never hold
+    the whole FieldsForTables catalog in memory.
     """
     for fc in fft.findall('FieldCatalog'):
-        bt = fc.find('BaseTableReference')
-        if bt is None:
-            continue
-        table_name = bt.get('name', '')
-        table_id_val = int(bt.get('id', 0))
-        table_uuid = bt.get('UUID', '')
+        _handle_single_field_catalog(fc, c, file_id)
 
-        obj_list = fc.find('ObjectList')
-        field_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
 
-        c.execute(
-            "INSERT INTO tables_def (file_id, table_id, name, uuid, field_count) "
-            "VALUES (?,?,?,?,?)",
-            (file_id, table_id_val, table_name, table_uuid, field_count),
-        )
+def _handle_single_field_catalog(fc, c, file_id):
+    """Process one FieldCatalog element (one BaseTable + its fields).
 
-        if obj_list is None:
-            continue
-        for field in obj_list.findall('Field'):
+    Extracted so the streaming path can dispatch on FieldCatalog end
+    events inside FieldsForTables and clear each one before the next
+    starts to accumulate.
+    """
+    bt = fc.find('BaseTableReference')
+    if bt is None:
+        return
+    table_name = bt.get('name', '')
+    table_id_val = int(bt.get('id', 0))
+    table_uuid = bt.get('UUID', '')
+
+    obj_list = fc.find('ObjectList')
+    field_count = int(obj_list.get('membercount', 0)) if obj_list is not None else 0
+
+    c.execute(
+        "INSERT INTO tables_def (file_id, table_id, name, uuid, field_count) "
+        "VALUES (?,?,?,?,?)",
+        (file_id, table_id_val, table_name, table_uuid, field_count),
+    )
+
+    if obj_list is None:
+        return
+    for field in obj_list.findall('Field'):
             fid = int(field.get('id', 0))
             fname = field.get('name', '')
             ftype = field.get('fieldtype', '')
@@ -984,62 +998,77 @@ def _handle_script_catalog(sc, c, file_id):
 
 
 def _handle_layout_catalog(lc, c, file_id):
-    """Process a LayoutCatalog element.
+    """Process a LayoutCatalog element (thin wrapper).
 
-    Writes to ``layouts`` and to ``script_references`` / ``field_references``
-    (for buttons / triggers / field placements on the layout).
+    Kept for the DOM-based fallback path. The streaming path dispatches on
+    individual Layout end events via ``_handle_single_layout`` instead —
+    on a layout-heavy solution (SAMPLES: 526 layouts, 4013 fields) the
+    LayoutCatalog can push peak RSS to nearly a GB if the whole catalog
+    is held in memory before it's cleared.
     """
     for layout in lc.findall('Layout'):
-        lid = int(layout.get('id', 0))
-        lname = layout.get('name', '')
-        lwidth = int(layout.get('width', 0)) if layout.get('width') else 0
+        _handle_single_layout(layout, c, file_id)
 
-        luuid = ''
-        uuid_elem = layout.find('UUID')
-        if uuid_elem is not None and uuid_elem.text:
-            luuid = uuid_elem.text.strip()
 
-        to_name = ''
-        to_id = 0
-        to_ref = layout.find('TableOccurrenceReference')
-        if to_ref is not None:
-            to_name = to_ref.get('name', '')
-            to_id = int(to_ref.get('id', 0))
+def _handle_single_layout(layout, c, file_id):
+    """Process one Layout element.
 
+    Extracted so the streaming path can dispatch on Layout end events
+    inside LayoutCatalog and clear each layout before the next one starts
+    to accumulate. Layouts carry all their objects (buttons, portals,
+    field placements, sub-groups) so a single big layout can be several
+    MB in ElementTree representation.
+    """
+    lid = int(layout.get('id', 0))
+    lname = layout.get('name', '')
+    lwidth = int(layout.get('width', 0)) if layout.get('width') else 0
+
+    luuid = ''
+    uuid_elem = layout.find('UUID')
+    if uuid_elem is not None and uuid_elem.text:
+        luuid = uuid_elem.text.strip()
+
+    to_name = ''
+    to_id = 0
+    to_ref = layout.find('TableOccurrenceReference')
+    if to_ref is not None:
+        to_name = to_ref.get('name', '')
+        to_id = int(to_ref.get('id', 0))
+
+    c.execute(
+        """INSERT INTO layouts
+            (file_id, layout_id, name, uuid, table_occurrence, table_occurrence_id, width)
+            VALUES (?,?,?,?,?,?,?)""",
+        (file_id, lid, lname, luuid, to_name, to_id, lwidth),
+    )
+
+    # Extract script references from layout buttons / triggers
+    for sr in layout.findall('.//ScriptReference'):
+        sr_id = int(sr.get('id', 0))
+        sr_name = sr.get('name', '')
+        sr_uuid = sr.get('UUID', '')
         c.execute(
-            """INSERT INTO layouts
-                (file_id, layout_id, name, uuid, table_occurrence, table_occurrence_id, width)
-                VALUES (?,?,?,?,?,?,?)""",
-            (file_id, lid, lname, luuid, to_name, to_id, lwidth),
+            """INSERT INTO script_references
+                (file_id, source_type, source_id, source_name, target_script_id,
+                 target_script_name, target_script_uuid, context)
+                VALUES (?,?,?,?,?,?,?,?)""",
+            (file_id, 'layout', lid, lname, sr_id, sr_name, sr_uuid, 'button/trigger'),
         )
 
-        # Extract script references from layout buttons / triggers
-        for sr in layout.findall('.//ScriptReference'):
-            sr_id = int(sr.get('id', 0))
-            sr_name = sr.get('name', '')
-            sr_uuid = sr.get('UUID', '')
-            c.execute(
-                """INSERT INTO script_references
-                    (file_id, source_type, source_id, source_name, target_script_id,
-                     target_script_name, target_script_uuid, context)
-                    VALUES (?,?,?,?,?,?,?,?)""",
-                (file_id, 'layout', lid, lname, sr_id, sr_name, sr_uuid, 'button/trigger'),
-            )
-
-        # Extract field references from layout
-        for fr in layout.findall('.//FieldReference'):
-            frid = int(fr.get('id', 0))
-            frname = fr.get('name', '')
-            to = fr.find('TableOccurrenceReference')
-            toname = to.get('name', '') if to is not None else ''
-            toid = int(to.get('id', 0)) if to is not None else 0
-            c.execute(
-                """INSERT INTO field_references
-                    (file_id, source_type, source_id, source_name, field_id, field_name,
-                     table_occurrence, table_occurrence_id, context)
-                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                (file_id, 'layout', lid, lname, frid, frname, toname, toid, 'layout_field'),
-            )
+    # Extract field references from layout
+    for fr in layout.findall('.//FieldReference'):
+        frid = int(fr.get('id', 0))
+        frname = fr.get('name', '')
+        to = fr.find('TableOccurrenceReference')
+        toname = to.get('name', '') if to is not None else ''
+        toid = int(to.get('id', 0)) if to is not None else 0
+        c.execute(
+            """INSERT INTO field_references
+                (file_id, source_type, source_id, source_name, field_id, field_name,
+                 table_occurrence, table_occurrence_id, context)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+            (file_id, 'layout', lid, lname, frid, frname, toname, toid, 'layout_field'),
+        )
 
 
 def _handle_external_data_source_catalog(edsc, c, file_id):
@@ -1252,18 +1281,23 @@ def _index_file_streaming(xml_path, db_path, start):
     file_id = None
     cf_names = []
 
-    # Which tag ends we dispatch on — order matters only when tags could
-    # nest (e.g. Script appears both directly under ScriptCatalog and
-    # inside StepsForScripts/Script; that ambiguity is resolved with a
-    # state flag below).
+    # Whole-catalog dispatch: process on the catalog's end event, then
+    # clear. Fine for small catalogs (value lists, relationships, script
+    # metadata, external data sources) that stay small on realistic
+    # solutions.
     _catalog_dispatch = {
-        'FieldsForTables':           _handle_fields_for_tables,
         'ValueListCatalog':          _handle_value_list_catalog,
         'RelationshipCatalog':       _handle_relationship_catalog,
         'ScriptCatalog':             _handle_script_catalog,
-        'LayoutCatalog':             _handle_layout_catalog,
         'ExternalDataSourceCatalog': _handle_external_data_source_catalog,
     }
+    # Per-child dispatch: for the memory-heavy catalogs, we process each
+    # child on its own end event and clear immediately, so peak memory
+    # tracks a single child, not the whole catalog. StepsForScripts/Script,
+    # FieldsForTables/FieldCatalog, LayoutCatalog/Layout all use this
+    # pattern. Layouts especially: a solution with 500+ layouts and full
+    # object graphs (buttons, portals, sub-groups) can otherwise push
+    # peak RSS close to a GB before LayoutCatalog end fires.
     # CustomFunctionCatalog and its plural variant use the same handler.
     _cf_tags = {'CustomFunctionCatalog', 'CustomFunctionsCatalog'}
 
@@ -1282,12 +1316,21 @@ def _index_file_streaming(xml_path, db_path, start):
         #     dump) can also contain <ModifyAction> and <DeleteAction>
         #     with their own catalog children — those must be ignored
         #     for indexing so counts match the DOM parser.
-        #   - in_steps_for_scripts: needed only to disambiguate the
-        #     Script tag, which appears both under ScriptCatalog (as
-        #     metadata) and under StepsForScripts (as a script's step
-        #     list). We only process the latter on Script end events.
+        #   - in_steps_for_scripts: disambiguates the Script tag, which
+        #     appears both under ScriptCatalog (as metadata) and under
+        #     StepsForScripts (as a script's step list). We only process
+        #     the latter on Script end events.
+        #   - in_layout_catalog: while set, each Layout end event is
+        #     processed per-layout and cleared. Without this, LayoutCatalog
+        #     would accumulate every layout in memory before its own end
+        #     fires — the observed 868 MB peak on SAMPLES (526 layouts).
+        #   - in_fields_for_tables: while set, each FieldCatalog end event
+        #     is processed per-table and cleared. Solutions with thousands
+        #     of fields (MetalsQC: 6,629; SAMPLES: 4,013) benefit here too.
         in_add_action = False
         in_steps_for_scripts = False
+        in_layout_catalog = False
+        in_fields_for_tables = False
 
         t_parse = time.time()
         for event, elem in ET.iterparse(tmp_path, events=('start', 'end')):
@@ -1307,8 +1350,12 @@ def _index_file_streaming(xml_path, db_path, start):
                     file_id = c.lastrowid
                 elif tag == 'AddAction':
                     in_add_action = True
-                elif tag == 'StepsForScripts' and in_add_action:
+                elif in_add_action and tag == 'StepsForScripts':
                     in_steps_for_scripts = True
+                elif in_add_action and tag == 'LayoutCatalog':
+                    in_layout_catalog = True
+                elif in_add_action and tag == 'FieldsForTables':
+                    in_fields_for_tables = True
                 continue
 
             # event == 'end'
@@ -1319,6 +1366,26 @@ def _index_file_streaming(xml_path, db_path, start):
                     elem.clear()
                 continue
 
+            # ── Per-child streaming dispatches (must come BEFORE the
+            # whole-catalog table so the container's own end event isn't
+            # double-processed): each of these takes one element, writes
+            # it to SQLite, and returns; the outer code clears it.
+            if tag == 'Layout' and in_layout_catalog:
+                _handle_single_layout(elem, c, file_id)
+                elem.clear()
+                continue
+            if tag == 'FieldCatalog' and in_fields_for_tables:
+                _handle_single_field_catalog(elem, c, file_id)
+                elem.clear()
+                continue
+            if tag == 'Script' and in_steps_for_scripts:
+                # One script's worth of steps — the memory-critical
+                # inner container for step-heavy solutions.
+                _handle_script_block(elem, c, file_id)
+                elem.clear()
+                continue
+
+            # ── Whole-catalog dispatches ──
             handler = _catalog_dispatch.get(tag)
             if handler is not None:
                 handler(elem, c, file_id)
@@ -1326,10 +1393,13 @@ def _index_file_streaming(xml_path, db_path, start):
             elif tag in _cf_tags:
                 _handle_custom_function_catalog(elem, c, file_id, cf_names)
                 elem.clear()
-            elif tag == 'Script' and in_steps_for_scripts:
-                # One script's worth of steps — this is the memory-critical
-                # inner container. Process and clear before moving on.
-                _handle_script_block(elem, c, file_id)
+            elif tag == 'LayoutCatalog':
+                # Contents already handled per-Layout above; just clear.
+                in_layout_catalog = False
+                elem.clear()
+            elif tag == 'FieldsForTables':
+                # Contents already handled per-FieldCatalog above.
+                in_fields_for_tables = False
                 elem.clear()
             elif tag == 'StepsForScripts':
                 in_steps_for_scripts = False

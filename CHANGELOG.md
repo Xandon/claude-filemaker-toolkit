@@ -4,6 +4,57 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — 2026-07-23
+
+### Fixed
+- **`fm_manage.py index` printed "Database saved to:" twice per solution.**
+  The first line was `.fm_db_cache/<name>.db` (the temp cache path);
+  the second was `solutions/<name>/<name>.db` (the final location).
+  In fact `fm_manage.py` copies the DB from the cache to the solutions
+  folder, unlinks the cache copy, and prints its own final-location
+  message — so the first path was stale by the time the user saw it,
+  the DB was NOT actually in two places, and reading the output made
+  it look like both files existed. The stale line is now filtered
+  out of the fm_parser subprocess output before the final message
+  prints. Only one authoritative "Database saved to:" line per run.
+
+### Changed
+- **Per-Layout and per-FieldCatalog streaming in `fm_parser.py`.**
+  Previously, `LayoutCatalog` and `FieldsForTables` were handled as
+  whole catalogs on their end events: iterparse accumulated every
+  child element under those containers before the handler ran, so
+  peak RSS scaled with the size of the largest catalog rather than
+  the largest single child. On a layout-heavy real-world solution
+  (SAMPLES: 248 MB XML, 526 layouts, 4,013 fields) this pushed peak
+  RSS to **868 MB** — well above the < 500 MB target for the
+  streaming indexer.
+
+  Fix (mirrors the existing per-Script pattern inside `StepsForScripts`):
+    - Extracted `_handle_single_layout` from `_handle_layout_catalog`
+      and `_handle_single_field_catalog` from
+      `_handle_fields_for_tables` (both retained for the DOM fallback
+      path).
+    - Added `in_layout_catalog` and `in_fields_for_tables` state flags
+      to the iterparse loop.
+    - The loop now dispatches on Layout and FieldCatalog end events
+      inside their respective catalogs, calls the per-child handler,
+      and clears the element immediately. The enclosing catalog's own
+      end event just resets the flag and clears the (now empty)
+      container.
+
+  Expected: peak RSS on layout-heavy DDRs (500+ layouts) drops from
+  "all layouts in memory" to "one biggest layout in memory", which
+  should bring SAMPLES from 868 MB to the 200–400 MB range and keep
+  other files under the 500 MB target regardless of layout count.
+  Field-heavy solutions (MetalsQC: 6,629 fields; SAMPLES: 4,013)
+  benefit less because individual fields are smaller than layouts,
+  but the pattern is symmetric and costs nothing.
+
+- **Parity verified in-repo** (PBS Demo — Maps Widget, 4.2 MB XML):
+  full row-count parity across all 13 tables between streaming and
+  DOM paths; deep parity 100/100 on script_steps, 7/7 on layouts,
+  37/37 on fields (all row content byte-identical).
+
 ## [0.3.4] — 2026-07-23
 
 ### Fixed
@@ -394,6 +445,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.5]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.5
 [0.3.4]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.4
 [0.3.3]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.2

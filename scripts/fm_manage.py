@@ -255,7 +255,15 @@ def cmd_index(args):
         [sys.executable, str(FM_PARSER), "index", str(target_xml), "--db", str(temp_db)],
         capture_output=True, text=True
     )
-    print(result.stdout)
+    # Strip fm_parser's own "Database saved to: <cache path>" tail line: we
+    # copy the DB to the solutions folder below and unlink the cache copy,
+    # so that message would be stale by the time it hit the user's screen.
+    # We print our own "Database saved to: <final path>" after the copy.
+    filtered_stdout = '\n'.join(
+        line for line in result.stdout.splitlines()
+        if not line.startswith('Database saved to:')
+    )
+    print(filtered_stdout)
     if result.returncode != 0:
         print(result.stderr)
         sys.exit(1)
