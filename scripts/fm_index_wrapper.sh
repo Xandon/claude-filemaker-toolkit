@@ -58,12 +58,17 @@ if [ ! -f "$XML_FILE" ]; then
     exit 2
 fi
 
-# Optional --name flag
-NAME_ARGS=()
+# Optional --name flag. We deliberately avoid the "collect flags in an
+# array and expand later" pattern because on macOS's default bash 3.2
+# (which is what the plugin's target users will invoke this with),
+# expanding an empty array under `set -u` — even one initialised as
+# `NAME_ARGS=()` — raises "NAME_ARGS[@]: unbound variable" and aborts
+# the script. Bash 4.4+ fixed that, but Apple hasn't shipped a newer
+# bash. Instead, we track the override in a single string and branch
+# on it when invoking python below.
 SOL_NAME_OVERRIDE=""
 if [ "${1:-}" = "--name" ] && [ -n "${2:-}" ]; then
     SOL_NAME_OVERRIDE="$2"
-    NAME_ARGS=(--name "$2")
     shift 2
 fi
 
@@ -155,6 +160,10 @@ echo ""
 
 # ─── Run index + summary ─────────────────────────────────────────────────
 export FM_PROJECT_DIR="$PROJECT_DIR"
-"$PYTHON" "$FM_MANAGE" index "$XML_FILE" "${NAME_ARGS[@]}"
+if [ -n "$SOL_NAME_OVERRIDE" ]; then
+    "$PYTHON" "$FM_MANAGE" index "$XML_FILE" --name "$SOL_NAME_OVERRIDE"
+else
+    "$PYTHON" "$FM_MANAGE" index "$XML_FILE"
+fi
 echo ""
 "$PYTHON" "$FM_MANAGE" query "$SOL_NAME" summary

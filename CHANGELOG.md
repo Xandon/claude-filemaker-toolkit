@@ -4,6 +4,39 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-07-23
+
+### Fixed
+- **`fm_index_wrapper.sh` failed on macOS's default bash 3.2 with
+  `NAME_ARGS[@]: unbound variable`.** The previous version accumulated
+  the optional `--name <solution>` argument into a bash array
+  (`NAME_ARGS=()`) and expanded it as `"${NAME_ARGS[@]}"` at the
+  python invocation. On bash 4.4+ that expands to nothing for an empty
+  array, but on bash 3.2 — which is still what `#!/usr/bin/env bash`
+  resolves to on stock macOS — the same expansion under `set -u`
+  raises "unbound variable" and aborts the script. Because that abort
+  happens *after* the wrapper prints its `Plugin / Python / Project
+  dir / XML file / Solution` header, users running a batch loop saw
+  the header for each file followed by the error, and none of the
+  DDRs actually got indexed (real-world report: a 10-DDR / 2.7 GB
+  batch printed 10 error lines, produced 0 indexes).
+
+  Fix: dropped the array entirely. `SOL_NAME_OVERRIDE` is now a simple
+  string; the python invocation branches on whether the string is
+  empty, calling either
+  `python3 fm_manage.py index <xml> --name <override>` or
+  `python3 fm_manage.py index <xml>`. Portable across every bash from
+  3.2 onwards, and readable.
+
+  Regression-tested in-repo: end-to-end with and without `--name`,
+  and a self-check that greps the packaged wrapper to ensure the
+  offending `NAME_ARGS[@]` expansion is absent from live code (it
+  appears once in an explanatory comment describing what was
+  removed — that's fine).
+
+### Changed
+- No plugin runtime or Python changes. Wrapper-only fix.
+
 ## [0.3.3] — 2026-07-23
 
 ### Fixed
@@ -361,6 +394,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.4]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.4
 [0.3.3]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.1
