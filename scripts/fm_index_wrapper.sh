@@ -80,25 +80,34 @@ fi
 #    glob into them. We verify each candidate is actually filemaker-toolkit
 #    by grepping for the module docstring — otherwise a same-named script
 #    from a different plugin could be picked up.
+#
+#    Glob expansion happens in a subshell with nullglob enabled so
+#    non-matching patterns disappear cleanly. Isolating nullglob to a
+#    subshell also means its state doesn't leak, and none of the exit
+#    codes here can trip the outer `set -e` (the previous version used
+#    `shopt -p nullglob` to save state, but that command returns 1 when
+#    the option is off — which is the default — silently killing the
+#    script under `set -euo pipefail`).
 if [ -z "$FM_MANAGE" ]; then
-    SHOPT_RESET=$(shopt -p nullglob)
-    shopt -s nullglob
-    CANDIDATES=(
-        "$HOME/Library/Application Support/Claude/local-agent-mode-sessions"/*/*/rpm/plugin_*/scripts/fm_manage.py
-        "$HOME/Library/Application Support/Claude/plugins"/*/scripts/fm_manage.py
-        "$HOME/Library/Application Support/Claude/Plugins"/*/scripts/fm_manage.py
-        "$HOME/.filemaker-toolkit/scripts/fm_manage.py"
-    )
-    $SHOPT_RESET
-    for candidate in "${CANDIDATES[@]}"; do
+    while IFS= read -r candidate; do
+        [ -z "$candidate" ] && continue
         [ -f "$candidate" ] || continue
-        # Sanity-check: must be from filemaker-toolkit, not a same-named
-        # script that happens to sit somewhere similar.
+        # Sanity-check: must be filemaker-toolkit, not a same-named
+        # script sitting somewhere similar.
         if grep -q 'FileMaker Solution Manager' "$candidate" 2>/dev/null; then
             FM_MANAGE="$candidate"
             break
         fi
-    done
+    done < <(
+        (
+            shopt -s nullglob
+            printf '%s\n' \
+                "$HOME/Library/Application Support/Claude/local-agent-mode-sessions"/*/*/rpm/plugin_*/scripts/fm_manage.py \
+                "$HOME/Library/Application Support/Claude/plugins"/*/scripts/fm_manage.py \
+                "$HOME/Library/Application Support/Claude/Plugins"/*/scripts/fm_manage.py \
+                "$HOME/.filemaker-toolkit/scripts/fm_manage.py"
+        )
+    )
 fi
 
 if [ -z "$FM_MANAGE" ]; then

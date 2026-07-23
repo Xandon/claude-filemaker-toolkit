@@ -4,6 +4,36 @@ All notable changes to the FileMaker Toolkit plugin are documented in this
 file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-07-23
+
+### Fixed
+- **`fm_index_wrapper.sh` silently exited on first run when `nullglob`
+  was off (its default state).** Under `set -euo pipefail`, the
+  `SHOPT_RESET=$(shopt -p nullglob)` line intended to save the shopt
+  state for restoration returns exit code 1 whenever `nullglob` is
+  off — which is the default in a fresh interactive shell. That
+  non-zero return killed the wrapper before it printed its own
+  `Plugin: …` header, leaving the user with just their outer loop's
+  `!!! FAILED: …` fallback and no diagnostic. Reproduced in-repo:
+  running the wrapper with `HOME=` pointed at an empty directory
+  used to exit silently; it now prints the full "Could not locate
+  fm_manage.py" block.
+
+  Fix: replaced the `shopt -p` / `shopt -s` / restore dance with a
+  subshell that enables `nullglob` locally, expands the candidate
+  globs via `printf '%s\n'`, and pipes the results to a `while
+  IFS= read -r candidate` loop in the outer script. Glob expansion
+  stays isolated to the subshell, no shopt state leaks, and none
+  of the exit codes involved can trip `set -e`.
+
+  Regression tests exercised in-repo: `bash -n` syntax, `--help`
+  output, missing-file error path, no-candidates auto-detect
+  (prints the ERR block, exits 1 with a clear message), and
+  `FM_MANAGE_PATH` override still resolving to a working indexer.
+
+### Changed
+- No plugin runtime or Python changes. Wrapper-only fix.
+
 ## [0.3.2] — 2026-07-19
 
 ### Added
@@ -331,6 +361,7 @@ upstream work between 0.1.0 and 0.2.3 included:
 - Skill (`filemaker-xml-analyzer`) with reference docs covering DDR XML
   structure, step types, relationship map, and FM step catalog.
 
+[0.3.3]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Xandon/claude-filemaker-toolkit/releases/tag/v0.3.0
