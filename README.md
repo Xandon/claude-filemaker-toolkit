@@ -4,11 +4,13 @@ A Cowork plugin for analyzing, reviewing, and shipping changes to FileMaker Pro 
 
 **Current version: 0.3.5**
 
+Real-world validation: **10 DDRs / 1.29 GB of XML indexed in ~45 seconds**, peak RSS under 500 MB even on the largest single file (SAMPLES: 248 MB XML, 526 layouts, 4,013 fields → 373 MB peak). See [PERFORMANCE.md](./PERFORMANCE.md) for the full benchmark table.
+
 ## What It Does
 
 The plugin is built around a simple loop: **index → understand → design → ship**.
 
-- **Indexes** a FileMaker DDR XML export (typically 10–200 MB, UTF-16 LE) into a compact SQLite database in 1–3 seconds
+- **Indexes** a FileMaker DDR XML export in seconds using a streaming parser. Peak memory is bounded by the largest single script or layout — not the whole document — so a 360 MB DDR indexes in a few hundred MB of RAM, not multiple GB
 - **Understands** your solution — queries scripts, fields, tables, layouts, relationships, value lists, custom functions, and cross-references, and diagnoses performance hotspots, anti-patterns, orphaned scripts, duplicates, and health scores
 - **Reviews** scripts interactively — generates self-contained HTML reports with syntax-highlighted steps, severity-rated findings, before/after diffs, and one-click XML copy
 - **Designs and ships changes** with Claude — once your solution is indexed, you can talk to Claude about adding a feature, refactoring a script, or changing schema, and Claude grounds its proposal in your actual fields, layouts, scripts, and relationships. When the plan is agreed, `/fm-implement` packages it as a paste-ready HTML deliverable: new scripts with Copy-XML buttons (FM 18+ clipboard format, no MBS plugin required), and numbered manual steps for the layout / schema work FileMaker can't paste
@@ -17,7 +19,7 @@ The plugin is built around a simple loop: **index → understand → design → 
 
 Install as a Cowork plugin (Customize → Personal plugins → + → upload `.zip` or `.plugin` bundle). Once installed, the plugin exposes four slash commands (`/fm-setup`, `/fm-query`, `/fm-review`, `/fm-implement`) and a skill (`filemaker-xml-analyzer`) that triggers automatically on FileMaker-related queries.
 
-The plugin requires Python 3.9+ with the standard library only — no external dependencies.
+The plugin requires Python 3.9+ with the standard library only — no external dependencies. Everything the plugin does at runtime uses stock stdlib modules (`xml.etree.ElementTree`, `sqlite3`, `codecs`, `tempfile`, `re`), so the same scripts work anywhere `python3` runs — including on the user's own machine via the bundled wrapper (see [Large DDRs](#large-ddrs-native-terminal-run-required) below).
 
 ## Project Layout
 
@@ -94,21 +96,62 @@ python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py diagnose Solution hotspots
 python ${CLAUDE_PLUGIN_ROOT}/scripts/fm_manage.py implement Solution --spec spec.json -o out.html
 ```
 
+## Large DDRs: native Terminal run required
+
+For any DDR export **larger than 50 MB**, or any DDR that lives on your own machine while you're in a cloud Cowork sandbox, `/fm-setup` will refuse to index in-sandbox and route you to a native Terminal run on your own machine instead. The file never leaves your device. This is a hard rule — there's no cloud-transfer escape hatch, by design.
+
+The plugin ships a one-file wrapper that makes the native run trivial: **`scripts/fm_index_wrapper.sh`**. Drop just this one file (no Python needed) into the folder that holds your DDR XMLs, then:
+
+```bash
+cd "<folder containing the XML>"
+chmod +x fm_index_wrapper.sh                  # once, if the exec bit is stripped
+./fm_index_wrapper.sh "MySolution.xml"        # index + summary in one command
+# or, for a batch:
+for f in *.xml; do ./fm_index_wrapper.sh "$f"; done
+```
+
+The wrapper auto-detects `fm_manage.py` inside your installed Cowork plugin, invokes it against the current directory (so `solutions/` and `.fm_db_cache/` land here), and prints the index counts + `Peak RSS: N MB` for each file. Environment overrides:
+
+| Variable | Purpose |
+|---|---|
+| `FM_MANAGE_PATH` | Absolute path to `fm_manage.py` (bypasses auto-detect) |
+| `FM_PYTHON` | Python interpreter (default: `python3`) |
+| `FM_PROJECT_DIR` | Where `solutions/` and `.fm_db_cache/` land (default: `$PWD`) |
+
+Real-world calibration on a 2020 MacBook Pro: the plugin indexed a 10-DDR batch (BATCH, Core_Contacts, LAYER, MENU, MetalsQC, NVL Inspection Data, NVL Inspection, NVLwd, SAMPLES, Staff — totalling 1.29 GB of XML) in **~45 seconds** with peak RSS staying under **500 MB on every single file**. See [PERFORMANCE.md](./PERFORMANCE.md) for the file-by-file breakdown.
+
 ## Environment Variables
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `FM_PROJECT_DIR` | Override the project folder | current working directory |
 | `FM_DB_CACHE` | Override the SQLite cache location | `<project>/.fm_db_cache` |
+| `FM_MANAGE_PATH` | (Wrapper only) absolute path to `fm_manage.py`, bypasses auto-detect | — |
+| `FM_PYTHON` | (Wrapper only) Python interpreter | `python3` |
 
 ## How Indexing Works
 
-1. The parser opens the XML file in UTF-16 LE, strips invalid XML 1.0 control characters (common in FileMaker exports), and parses the full tree.
-2. It walks `Structure/AddAction` and extracts: files, base tables, fields, relationships, value lists, scripts with all their steps (raw XML + human-readable translation), layouts with table occurrences and script triggers, and custom functions (signature + parameters — DDR XML does not include calculation bodies).
-3. It scans every script's raw step XML for references to custom function names using regex word-boundary matching, building a `cf_references` table with one row per (script, step, custom function).
-4. It writes everything to a SQLite database with indexes on the hot columns.
+The indexer streams the DDR XML end-to-end — it never holds the whole document in memory.
 
-A 100 MB XML file indexes in 1–3 seconds and produces a ~5 MB database. All queries are sub-millisecond.
+1. **Stream-transcode to UTF-8.** The source is read in 1 MiB chunks through `codecs.getincrementaldecoder` (the sniffed encoding — usually UTF-16 LE with BOM), invalid XML 1.0 control characters are stripped via a precomputed `str.translate` table (much faster than regex over hundreds of MB), and the XML declaration is rewritten to advertise UTF-8. The result lands in a `tempfile.NamedTemporaryFile` that gets unlinked in a `finally` block.
+2. **`xml.etree.ElementTree.iterparse` walks the temp file** with `start` / `end` events. Each catalog element (`FieldsForTables`, `ValueListCatalog`, `RelationshipCatalog`, `ScriptCatalog`, `LayoutCatalog`, `ExternalDataSourceCatalog`, `CustomFunctionCatalog` in both spellings) dispatches to a per-catalog handler on its `end` event and is then cleared.
+3. **Memory-heavy catalogs stream one child at a time.** Every `Script` end event inside `StepsForScripts`, every `Layout` end event inside `LayoutCatalog`, and every `FieldCatalog` end event inside `FieldsForTables` is processed and cleared individually. That means peak memory tracks the largest single script / layout / table's fields — not the whole catalog. A DDR with 526 layouts hits the same peak as one with 5.
+4. **State flags** (`in_add_action`, `in_steps_for_scripts`, `in_layout_catalog`, `in_fields_for_tables`) keep extraction scoped to the top-level `<AddAction>` container, matching the DOM parser's behaviour on diff-shaped DDRs that also carry `<ModifyAction>` / `<DeleteAction>`.
+5. **Cross-references built at the end.** After all script steps are inserted, the indexer scans `script_steps.raw_xml` in SQL for custom-function name matches (using a compiled regex sorted longest-first) and inserts the `cf_references` rows — all in-database, no XML in memory.
+6. **Everything lands in SQLite** with indexes on the hot columns and a peak-RSS number printed at the end of the run (POSIX only; normalized: macOS reports bytes, Linux KiB).
+
+**Observed on real DDRs (2020 MacBook Pro, `Python 3.9.13`):**
+
+| Size | Scripts | Steps | Layouts | Fields | Elapsed | Peak RSS |
+|---|---|---|---|---|---|---|
+| 16 MB | 238 | 5,741 | 55 | 364 | 0.9 s | 75 MB |
+| 118 MB | 797 | 34,355 | 159 | 801 | 6.0 s | 323 MB |
+| 143 MB | 332 | 20,488 | 191 | 755 | 7.1 s | 320 MB |
+| 236 MB | 594 | 17,328 | 337 | 1,000 | 4.0 s | 212 MB |
+| 248 MB | 694 | 27,988 | 526 | 4,013 | 7.8 s | 373 MB |
+| 360 MB | 761 | 20,690 | 416 | 2,195 | 6.6 s | 284 MB |
+
+A legacy DOM path (`parse_xml_dom` / `index_file(..., use_dom=True)`) is retained for correctness comparison but is never the default.
 
 ## Custom Function Framework Support
 
@@ -141,6 +184,7 @@ Both review and implementation pages are self-contained (zero external dependenc
 
 - **DDR XML omits calculation bodies** for custom functions. Only signatures and parameter names are available. Use MBS plugin extraction or manual entry if you need the body.
 - **Mounted filesystems** (Cowork) sometimes don't support SQLite locking. The toolkit falls back to `.fm_db_cache/` or `~/.cache/filemaker-toolkit/db_cache/` automatically.
+- **Large DDRs cannot be indexed in a cloud sandbox** (see [above](#large-ddrs-native-terminal-run-required)). This is a hard policy, not a technical limitation — the streaming indexer could handle them, but a device-resident DDR must not move. Use the bundled `fm_index_wrapper.sh` on your own machine instead.
 - **Content classifier false positives**: When analyzing solutions with domain-specific terminology (laboratory sample types, analytical methods, etc.), Cowork's content classifier may flag schema terms. Workarounds: write analysis to files via Python scripts, use script IDs and step numbers rather than domain vocabulary.
 
 ## Reviewing the Plugin for Efficiency
